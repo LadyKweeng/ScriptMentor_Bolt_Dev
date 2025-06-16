@@ -1,0 +1,169 @@
+import React, { useState, useRef } from 'react';
+import { Upload, FileText, X } from 'lucide-react';
+import { parseScreenplay } from '../utils/parseScreenplay';
+
+interface ScriptUploaderProps {
+  onScriptUploaded: (content: string, title: string, characters: Record<string, any>) => void;
+}
+
+const ScriptUploader: React.FC<ScriptUploaderProps> = ({ onScriptUploaded }) => {
+  const [isDragging, setIsDragging] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = () => {
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      handleFile(e.dataTransfer.files[0]);
+    }
+  };
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      handleFile(e.target.files[0]);
+    }
+  };
+
+  const handleFile = async (file: File) => {
+    if (!file) return;
+ 
+    setFile(file);
+    setIsProcessing(true);
+    setUploadError(null);
+    
+    try {
+      const parsedScript = await parseScreenplay(file);
+      
+      if (!parsedScript?.scenes || !Array.isArray(parsedScript.scenes) || parsedScript.scenes.length === 0) {
+        throw new Error('No valid scenes found in the uploaded file.');
+      }
+      
+      // Combine all scene content into a single string, ensuring it's properly formatted
+      const combinedContent = parsedScript.scenes
+        .map(scene => {
+          // Ensure we're working with string values only
+          const heading = typeof scene.heading === 'string' ? scene.heading : '';
+          const content = typeof scene.content === 'string' ? scene.content : '';
+          return `${heading}\n\n${content}`;
+        })
+        .join('\n\n');
+      
+      const title = parsedScript.metadata?.title || file.name.replace(/\.[^/.]+$/, "");
+      
+      // Pass the characters data to the parent component
+      onScriptUploaded(
+        combinedContent, 
+        title, 
+        parsedScript.characters || {} // Pass character data from parser
+      );
+      
+      setIsProcessing(false);
+    } catch (error: any) {
+      console.error('Error processing file:', error);
+      setUploadError(error.message || 'Error processing script file');
+      setFile(null);
+      setIsProcessing(false);
+    }
+  };
+
+  const handleOpenFileDialog = () => {
+    fileInputRef.current?.click();
+  };
+
+  const clearFile = () => {
+    setFile(null);
+    setUploadError(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  return (
+    <div className="w-full">
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFileInputChange}
+        accept=".fdx,.fountain,.txt"
+        className="hidden"
+      />
+      
+      {!file ? (
+        <div
+          className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+            isDragging
+            ? 'border-yellow-400 bg-yellow-400/5'
+            : 'border-slate-600 hover:border-slate-500 bg-slate-800/40'
+          }`}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
+          <Upload className="mx-auto h-12 w-12 text-slate-400 mb-3" />
+          <h3 className="text-lg font-medium text-slate-200 mb-2">
+            Upload Your Screenplay
+          </h3>
+          <p className="text-sm text-slate-400 mb-4">
+            Drag and drop your script file, or click to browse
+          </p>
+          <button
+            onClick={handleOpenFileDialog}
+            className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors"
+          >
+            Select Script File
+          </button>
+          <p className="text-xs text-slate-500 mt-4">
+            Supports FDX, Fountain, and TXT formats only
+          </p>
+        </div>
+      ) : (
+        <div className="border rounded-lg p-6 bg-slate-800/40 border-slate-700">
+          <div className="flex items-start justify-between mb-4">
+            <div className="flex items-center">
+              <FileText className="h-8 w-8 text-yellow-400 mr-3" />
+              <div>
+                <h3 className="text-lg font-medium text-slate-200">{file.name}</h3>
+                <p className="text-sm text-slate-400">{(file.size / 1024).toFixed(1)} KB</p>
+              </div>
+            </div>
+            <button
+              onClick={clearFile}
+              className="text-slate-400 hover:text-slate-300 p-1"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+          
+          {isProcessing ? (
+            <div className="flex items-center justify-center py-2">
+              <div className="animate-spin rounded-full h-6 w-6 border-t-2 border-b-2 border-yellow-400"></div>
+              <span className="ml-2 text-sm text-slate-300">Processing script...</span>
+            </div>
+          ) : uploadError ? (
+            <div className="text-red-400 text-sm py-2 bg-red-400/10 border border-red-400/20 rounded-md px-3">
+              {uploadError}
+            </div>
+          ) : (
+            <div className="bg-green-500/10 border border-green-500/20 rounded-md p-3 text-sm text-green-300">
+              Script uploaded successfully! Ready for analysis.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default ScriptUploader;

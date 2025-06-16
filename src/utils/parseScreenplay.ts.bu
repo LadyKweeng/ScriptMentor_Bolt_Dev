@@ -1,0 +1,255 @@
+// Improved parsing for FDX files with better text extraction
+async function parseFDXFile(fileContent) {
+  try {
+    const parser = new XMLParser({ 
+      ignoreAttributes: false, 
+      attributeNamePrefix: '',
+      textNodeName: "_text"
+    });
+    const parsed = parser.parse(fileContent);
+    
+    if (!parsed?.FinalDraft?.Content?.Paragraph) {
+      throw new Error('Invalid FDX file structure');
+    }
+    
+    const paragraphs = Array.isArray(parsed.FinalDraft.Content.Paragraph) 
+      ? parsed.FinalDraft.Content.Paragraph 
+      : [parsed.FinalDraft.Content.Paragraph];
+    
+    const scenes = [];
+    let currentScene = null;
+    const characters = new Set();
+    
+    paragraphs.forEach((para) => {
+      // Get type and safely extract text content
+      const type = para.Type;
+      let text = extractTextContent(para);
+      
+      if (type === 'Scene Heading') {
+        if (currentScene) {
+          scenes.push(currentScene);
+        }
+        currentScene = { heading: text, content: '', characters: [] };
+      } else if (type === 'Character') {
+        // Capture character names for character memory
+        const charName = text.trim();
+        characters.add(charName);
+        if (currentScene) {
+          currentScene.characters.push(charName);
+        }
+        
+        // Append the character to content as well
+        if (currentScene) {
+          currentScene.content += `${text}\n`;
+        }
+      } else if (currentScene) {
+        currentScene.content += `${text}\n`;
+      }
+    });
+    
+    if (currentScene) {
+      scenes.push(currentScene);
+    }
+    
+    // Include extracted characters in the return value
+    return {
+      scenes,
+      characters: Array.from(characters)
+    };
+  } catch (error) {
+    throw new Error(`Failed to parse FDX file: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+// Helper function to extract text from potentially complex paragraph objects
+function extractTextContent(node) {
+  if (!node) return '';
+  
+  // If node is a string, return it directly
+  if (typeof node === 'string') return node;
+  
+  // If node has _text property (from XMLParser config), use it
+  if (node._text) return node._text;
+  
+  // If node has Text property (common in Final Draft XML)
+  if (node.Text) {
+    // Text could be a string or an object/array
+    if (typeof node.Text === 'string') return node.Text;
+    if (Array.isArray(node.Text)) {
+      return node.Text.map(item => extractTextContent(item)).join('');
+    }
+    if (typeof node.Text === 'object') {
+      return extractTextContent(node.Text);
+    }
+  }
+  
+  // Try to get text from children if it's an array
+  if (Array.isArray(node)) {
+    return node.map(item => extractTextContent(item)).join('');
+  }
+  
+  // Handle object with multiple properties
+  if (typeof node === 'object' && node !== null) {
+    // For Final Draft specific structure
+    if (node.Content && node.Content.Paragraph) {
+      return extractTextContent(node.Content.Paragraph);
+    }
+    
+    // Extract from all properties recursively
+    return Object.values(node).map(item => extractTextContent(item)).join('');
+  }
+  
+  return '';
+}
+
+// Improved function to normalize scenes with proper character extraction
+function normalizeScenes(scenes, sourceType, extractedCharacters = []) {
+  return {
+    scenes: scenes.map((scene, index) => ({
+      sceneId: `scene_${String(index + 1).padStart(3, '0')}`,
+      heading: sourceType === 'fountain' ? scene.heading?.text || '' : scene.heading || '',
+      content: sourceType === 'fountain' 
+        ? (scene.content?.map((c) => typeof c.text === 'string' ? c.text : '').join('\n') || '')
+        : (typeof scene.content === 'string' ? scene.content : ''),
+      startPage: null,
+      endPage: null,
+      characters: scene.characters || []
+    })),
+    characters: extractedCharacters
+  };
+}
+
+// Improved extract characters function with format-specific detection
+function extractCharactersFromScenes(scenes, fileType) {
+  const characters = new Map();
+  
+  scenes.forEach(scene => {
+    // Use existing character data if present from parser
+    if (scene.characters && Array.isArray(scene.characters)) {
+      scene.characters.forEach(charName => {
+        if (!characters.has(charName)) {
+          characters.set(charName, {
+            scenes_present: new Set([scene.sceneId]),
+            lines: []
+          });
+        } else {
+          characters.get(charName).scenes_present.add(scene.sceneId);
+        }
+      });
+    } else {
+      // Fallback to text parsing if characters not pre-extracted
+      const lines = scene.content.split('\n');
+      
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        
+        // Character detection logic based on format
+        let isCharacter = false;
+        
+        if (fileType === 'fdx') {
+          // For FDX - already should be handled by parser
+          isCharacter = false;
+        } else if (fileType === 'fountain') {
+          // For Fountain - check for character syntax
+          isCharacter = /^@[A-Z][A-Z0-9\s]*(\(.+\))?$/.test(line);
+        } else {
+          // For TXT and general - uppercase standalone line
+          isCharacter = line.length > 0 && 
+                      line === line.toUpperCase() && 
+                      line.length < 40 &&
+                      !line.startsWith('INT') && 
+                      !line.startsWith('EXT');
+        }
+        
+        if (isCharacter) {
+          const charName = line.replace(/^@/, '').split('(')[0].trim();
+          
+          if (!characters.has(charName)) {
+            characters.set(charName, {
+              scenes_present: new Set([scene.sceneId]),
+              lines: []
+            });
+          } else {
+            characters.get(charName).scenes_present.add(scene.sceneId);
+          }
+          
+          // Try to grab next line as dialog
+          if (i + 1 < lines.length) {
+            characters.get(charName).lines.push(lines[i + 1]);
+          }
+        }
+      }
+    }
+  });
+  
+  // Convert to character profiles
+  const characterProfiles = {};
+  
+  for (const [name, data] of characters.entries()) {
+    const exampleDialog = data.lines.join(' ').slice(0, 300);
+    
+    // Basic heuristics for arc and emotion
+    const arc = exampleDialog.toLowerCase().includes("don't") || 
+                exampleDialog.toLowerCase().includes("shut up") 
+                ? "Denial" : "Discovery";
+                
+    const emotion = exampleDialog.toLowerCase().includes("quiet") || 
+                    exampleDialog.toLowerCase().includes("nervous") 
+                    ? "Fearful, repressed" : "Neutral";
+
+    characterProfiles[name] = {
+      arc_phase: arc,
+      emotional_state: emotion,
+      scenes_present: Array.from(data.scenes_present),
+      triggers: [],
+      support: [],
+      notes: `Auto-generated from dialogue: ${exampleDialog.slice(0, 100)}...`
+    };
+  }
+  
+  return characterProfiles;
+}
+
+// Main parseScreenplay function incorporating the fixes
+export async function parseScreenplay(file) {
+  try {
+    const fileType = detectFileType(file.name);
+    const fileContent = await file.text();
+    
+    let rawScenes = [];
+    let extractedCharacters = [];
+    
+    if (fileType === 'fountain') {
+      const result = await parseFountain(fileContent);
+      rawScenes = result.scenes || [];
+      extractedCharacters = result.characters || [];
+    } else if (fileType === 'fdx') {
+      const result = await parseFDXFile(fileContent);
+      rawScenes = result.scenes || [];
+      extractedCharacters = result.characters || [];
+    } else if (fileType === 'txt') {
+      const result = await parseTXTFile(fileContent);
+      rawScenes = result.scenes || [];
+      extractedCharacters = result.characters || [];
+    }
+    
+    if (!rawScenes.length) {
+      throw new Error(`No scenes found in the ${fileType.toUpperCase()} file.`);
+    }
+    
+    const normalized = normalizeScenes(rawScenes, fileType, extractedCharacters);
+    const characterProfiles = extractCharactersFromScenes(normalized.scenes, fileType);
+    
+    return {
+      metadata: {
+        title: extractTitleFromContent(fileContent, fileType) || file.name.replace(/\.[^/.]+$/, ""),
+        author: extractAuthorFromContent(fileContent, fileType) || null,
+        uploadType: fileType,
+      },
+      scenes: normalized.scenes,
+      characters: characterProfiles
+    };
+  } catch (error) {
+    throw new Error(`Error parsing screenplay: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
