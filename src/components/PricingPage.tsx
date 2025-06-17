@@ -1,139 +1,172 @@
-// src/components/PricingPage.tsx
 import React, { useState } from 'react';
+import { products } from '../stripe-config';
 import { stripeService } from '../services/stripeService';
-import { Check, Zap, Crown, Gift } from 'lucide-react';
+import { Check, Star, Loader } from 'lucide-react';
 
 const PricingPage: React.FC = () => {
-  const [loading, setLoading] = useState<string | null>(null);
+  const [loadingPriceId, setLoadingPriceId] = useState<string | null>(null);
 
-  const handleSubscribe = async (priceId: string, planName: string) => {
-    setLoading(planName);
+  const handleSubscribe = async (priceId: string, mode: 'subscription' | 'payment') => {
     try {
-      const { url } = await stripeService.createCheckoutSession(priceId);
-      window.location.href = url;
+      setLoadingPriceId(priceId);
+      
+      await stripeService.redirectToCheckout({
+        priceId,
+        mode,
+        successUrl: `${window.location.origin}/success`,
+        cancelUrl: `${window.location.origin}/pricing`
+      });
     } catch (error) {
-      console.error('Error creating checkout session:', error);
-      setLoading(null);
+      console.error('Failed to start checkout:', error);
+      alert('Failed to start checkout. Please try again.');
+    } finally {
+      setLoadingPriceId(null);
     }
   };
 
-  const plans = [
-    {
-      name: 'Free Tier',
-      price: '$0',
-      period: '/month',
-      description: '50 tokens/month. Access to single mentor feedback only.',
-      features: [
-        '50 tokens per month',
-        'Single mentor feedback',
-        'Basic script analysis',
-        'Community support'
-      ],
-      icon: Gift,
-      buttonText: 'Current Plan',
-      disabled: true,
-      priceId: null
-    },
-    {
-      name: 'Creator',
-      price: '$19.99',
-      period: '/month',
-      description: '500 tokens per month. Access to all mentor personalities.',
-      features: [
-        '500 tokens per month',
-        'All mentor personalities',
-        'Blended feedback mode',
-        'Writer Agent analysis',
-        'Priority support'
-      ],
-      icon: Zap,
-      buttonText: 'Subscribe',
-      popular: true,
-      priceId: 'price_creator_monthly'
-    },
-    {
-      name: 'Pro',
-      price: '$49.99',
-      period: '/month',
-      description: '1,500 tokens/month with 30% token discount.',
-      features: [
-        '1,500 tokens per month',
-        '30% token discount',
-        'Everything from Creator',
-        'Advanced analytics',
-        'Premium support'
-      ],
-      icon: Crown,
-      buttonText: 'Subscribe',
-      priceId: 'price_pro_monthly'
-    }
-  ];
+  const formatPrice = (price: number, currency: string) => {
+    if (price === 0) return 'Free';
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: currency.toUpperCase(),
+    }).format(price);
+  };
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white">
-      <div className="container mx-auto px-4 py-16">
+    <div className="min-h-screen bg-slate-900 py-12 px-4">
+      <div className="max-w-7xl mx-auto">
+        {/* Header */}
         <div className="text-center mb-16">
-          <h1 className="text-4xl font-bold mb-4">Choose Your Plan</h1>
-          <p className="text-xl text-slate-400">
-            Get AI-powered screenplay feedback from industry mentors
+          <h1 className="text-4xl font-bold text-white mb-4">
+            Choose Your ScriptMentor Plan
+          </h1>
+          <p className="text-xl text-slate-400 max-w-3xl mx-auto">
+            Get AI-powered screenplay feedback from industry-inspired mentors. 
+            Choose the plan that fits your writing journey.
           </p>
         </div>
 
-        <div className="grid md:grid-cols-3 gap-8 max-w-6xl mx-auto">
-          {plans.map((plan) => {
-            const Icon = plan.icon;
-            return (
-              <div
-                key={plan.name}
-                className={`relative bg-slate-800 rounded-xl p-8 border ${
-                  plan.popular
-                    ? 'border-yellow-400 ring-2 ring-yellow-400/20'
-                    : 'border-slate-700'
-                }`}
-              >
-                {plan.popular && (
-                  <div className="absolute -top-4 left-1/2 transform -translate-x-1/2">
-                    <span className="bg-yellow-400 text-slate-900 px-4 py-1 rounded-full text-sm font-medium">
-                      Most Popular
-                    </span>
+        {/* Pricing Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-5xl mx-auto">
+          {products.map((product) => (
+            <div
+              key={product.id}
+              className={`relative bg-slate-800 rounded-2xl p-8 border-2 transition-all duration-300 hover:scale-105 ${
+                product.popular
+                  ? 'border-yellow-400 shadow-lg shadow-yellow-400/20'
+                  : 'border-slate-700 hover:border-slate-600'
+              }`}
+            >
+              {/* Popular Badge */}
+              {product.popular && (
+                <div className="absolute -top-4 left-1/2 transform -translate-x-1/2">
+                  <div className="bg-yellow-400 text-slate-900 px-4 py-1 rounded-full text-sm font-semibold flex items-center gap-1">
+                    <Star className="h-4 w-4" />
+                    Most Popular
                   </div>
-                )}
-
-                <div className="text-center mb-8">
-                  <Icon className="h-12 w-12 mx-auto mb-4 text-yellow-400" />
-                  <h3 className="text-2xl font-bold mb-2">{plan.name}</h3>
-                  <div className="mb-4">
-                    <span className="text-4xl font-bold">{plan.price}</span>
-                    <span className="text-slate-400">{plan.period}</span>
-                  </div>
-                  <p className="text-slate-400">{plan.description}</p>
                 </div>
+              )}
 
-                <ul className="space-y-4 mb-8">
-                  {plan.features.map((feature, index) => (
-                    <li key={index} className="flex items-center">
-                      <Check className="h-5 w-5 text-green-400 mr-3 flex-shrink-0" />
-                      <span className="text-slate-300">{feature}</span>
+              {/* Plan Header */}
+              <div className="text-center mb-8">
+                <h3 className="text-2xl font-bold text-white mb-2">
+                  {product.name}
+                </h3>
+                <div className="mb-4">
+                  <span className="text-4xl font-bold text-white">
+                    {formatPrice(product.price, product.currency)}
+                  </span>
+                  {product.interval && product.price > 0 && (
+                    <span className="text-slate-400 ml-2">
+                      /{product.interval}
+                    </span>
+                  )}
+                </div>
+                <p className="text-slate-400 text-sm leading-relaxed">
+                  {product.description}
+                </p>
+              </div>
+
+              {/* Features */}
+              <div className="mb-8">
+                <ul className="space-y-3">
+                  {product.features.map((feature, index) => (
+                    <li key={index} className="flex items-start gap-3">
+                      <Check className="h-5 w-5 text-green-400 flex-shrink-0 mt-0.5" />
+                      <span className="text-slate-300 text-sm">{feature}</span>
                     </li>
                   ))}
                 </ul>
-
-                <button
-                  onClick={() => plan.priceId && handleSubscribe(plan.priceId, plan.name)}
-                  disabled={plan.disabled || loading === plan.name}
-                  className={`w-full py-3 px-6 rounded-lg font-medium transition-colors ${
-                    plan.disabled
-                      ? 'bg-slate-600 text-slate-400 cursor-not-allowed'
-                      : plan.popular
-                      ? 'bg-yellow-400 text-slate-900 hover:bg-yellow-300'
-                      : 'bg-slate-700 text-white hover:bg-slate-600'
-                  }`}
-                >
-                  {loading === plan.name ? 'Loading...' : plan.buttonText}
-                </button>
               </div>
-            );
-          })}
+
+              {/* CTA Button */}
+              <button
+                onClick={() => handleSubscribe(product.priceId, product.mode)}
+                disabled={loadingPriceId === product.priceId}
+                className={`w-full py-3 px-6 rounded-lg font-semibold transition-all duration-300 flex items-center justify-center gap-2 ${
+                  product.popular
+                    ? 'bg-yellow-400 hover:bg-yellow-300 text-slate-900'
+                    : product.price === 0
+                    ? 'bg-slate-700 hover:bg-slate-600 text-white'
+                    : 'bg-blue-600 hover:bg-blue-500 text-white'
+                } ${
+                  loadingPriceId === product.priceId
+                    ? 'opacity-75 cursor-not-allowed'
+                    : 'hover:scale-105'
+                }`}
+              >
+                {loadingPriceId === product.priceId ? (
+                  <>
+                    <Loader className="h-4 w-4 animate-spin" />
+                    Processing...
+                  </>
+                ) : (
+                  <>
+                    {product.price === 0 ? 'Get Started Free' : 'Subscribe Now'}
+                  </>
+                )}
+              </button>
+            </div>
+          ))}
+        </div>
+
+        {/* FAQ Section */}
+        <div className="mt-20 max-w-3xl mx-auto">
+          <h2 className="text-2xl font-bold text-white text-center mb-8">
+            Frequently Asked Questions
+          </h2>
+          <div className="space-y-6">
+            <div className="bg-slate-800 rounded-lg p-6">
+              <h3 className="text-lg font-semibold text-white mb-2">
+                What are tokens?
+              </h3>
+              <p className="text-slate-400">
+                Tokens are used to generate AI feedback on your scripts. Each analysis 
+                consumes tokens based on the length and complexity of your screenplay.
+              </p>
+            </div>
+            
+            <div className="bg-slate-800 rounded-lg p-6">
+              <h3 className="text-lg font-semibold text-white mb-2">
+                Can I change my plan anytime?
+              </h3>
+              <p className="text-slate-400">
+                Yes! You can upgrade or downgrade your plan at any time. Changes will 
+                be reflected in your next billing cycle.
+              </p>
+            </div>
+            
+            <div className="bg-slate-800 rounded-lg p-6">
+              <h3 className="text-lg font-semibold text-white mb-2">
+                What's the difference between mentors?
+              </h3>
+              <p className="text-slate-400">
+                Each mentor has a unique perspective inspired by industry professionals. 
+                Higher tiers give you access to more mentors and blended feedback that 
+                combines multiple viewpoints.
+              </p>
+            </div>
+          </div>
         </div>
       </div>
     </div>
