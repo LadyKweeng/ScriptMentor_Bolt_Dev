@@ -29,11 +29,16 @@ class AIFeedbackService {
     }
   }
   
+  /**
+   * MAIN ENTRY POINT: Generate dual feedback using backend API for ALL modes
+   */
   async generateDualFeedback(request: AIFeedbackRequest): Promise<AIFeedbackResponse> {
     console.log('🤖 AI Service generating dual feedback for:', {
       mentor: request.mentor.name,
+      mentorId: request.mentor.id,
       sceneLength: request.scene.content.length,
-      characterCount: Object.keys(request.characters).length
+      characterCount: Object.keys(request.characters).length,
+      isBlended: request.mentor.id === 'blended'
     });
     
     try {
@@ -43,10 +48,10 @@ class AIFeedbackService {
       // Build character context with proper error handling
       const characterContext = this.buildCharacterContext(request.characters);
       
-      // Generate both types of feedback in parallel with mentor-specific settings
+      // ALWAYS use backend API for both structured and scratchpad feedback
       const [structuredContent, scratchpadContent] = await Promise.all([
-        this.generateSingleFeedback(request, 'structured', characterContext, feedbackStyle),
-        this.generateSingleFeedback(request, 'scratchpad', characterContext, feedbackStyle)
+        this.generateBackendFeedback(request, 'structured', characterContext, feedbackStyle),
+        this.generateBackendFeedback(request, 'scratchpad', characterContext, feedbackStyle)
       ]);
       
       // Create the dual feedback object
@@ -56,22 +61,107 @@ class AIFeedbackService {
         request
       );
       
-      console.log('✅ Successfully generated both structured and scratchpad feedback');
+      console.log('✅ Successfully generated both structured and scratchpad feedback via backend API');
       return { feedback };
       
     } catch (error) {
-      console.warn('AI dual feedback failed, using enhanced mock:', error);
+      console.warn('❌ Backend API failed, using enhanced mock feedback:', error);
       return { feedback: this.generateEnhancedDualFeedback(request) };
     }
   }
+
+  /**
+   * Generate blended feedback using backend API
+   */
+  async generateBlendedFeedback(
+    scene: ScriptScene,
+    mentors: Mentor[],
+    mentorWeights: Record<string, number>,
+    characters: Record<string, Character>
+  ): Promise<AIFeedbackResponse> {
+    console.log('🎭 AI Service generating blended feedback for:', {
+      mentors: mentors.map(m => m.name),
+      sceneLength: scene.content.length,
+      characterCount: Object.keys(characters).length,
+      weights: mentorWeights
+    });
+
+    try {
+      // Build character context
+      const characterContext = this.buildCharacterContext(characters);
+      
+      // Create blended mentor object for backend processing
+      const blendedMentor: Mentor = {
+        id: 'blended',
+        name: 'Blended Mentors',
+        tone: `Combined insights from: ${mentors.map(m => m.name).join(', ')}`,
+        styleNotes: 'Multi-perspective analysis combining different mentoring approaches',
+        avatar: 'https://images.pexels.com/photos/7102/notes-macbook-study-conference.jpg?auto=compress&cs=tinysrgb&w=600',
+        accent: '#8b5cf6',
+        mantra: 'Multiple perspectives reveal the full picture.',
+        feedbackStyle: 'analytical',
+        priorities: ['multi-perspective-analysis', 'consensus-building', 'comprehensive-coverage'],
+        analysisApproach: 'Combines insights from multiple mentoring perspectives'
+      };
+
+      // Generate blended feedback using backend API with special blended context
+      const blendedRequest = {
+        scene,
+        mentor: blendedMentor,
+        characters
+      };
+
+      const [structuredContent, scratchpadContent] = await Promise.all([
+        this.generateBlendedBackendFeedback(blendedRequest, 'structured', characterContext, mentors, mentorWeights),
+        this.generateBlendedBackendFeedback(blendedRequest, 'scratchpad', characterContext, mentors, mentorWeights)
+      ]);
+
+      const feedback = this.createDualFeedbackObject(
+        structuredContent,
+        scratchpadContent,
+        blendedRequest
+      );
+
+      console.log('✅ Successfully generated blended feedback via backend API');
+      return { feedback };
+
+    } catch (error) {
+      console.warn('❌ Blended feedback backend API failed, using enhanced mock:', error);
+      return { feedback: this.generateEnhancedBlendedMockFeedback(scene, mentors, characters) };
+    }
+  }
   
-  private async generateSingleFeedback(
+  /**
+   * Generate single feedback mode using backend API (for legacy compatibility)
+   */
+  async generateFeedback(request: AIFeedbackRequest & { mode?: 'structured' | 'scratchpad' }): Promise<AIFeedbackResponse> {
+    console.log('🔄 Legacy single feedback mode requested, redirecting to dual feedback');
+    
+    // Always generate dual feedback, then extract the requested mode
+    const dualResponse = await this.generateDualFeedback(request);
+    
+    // If specific mode requested, prioritize that content
+    if (request.mode === 'scratchpad') {
+      dualResponse.feedback.content = dualResponse.feedback.scratchpadContent;
+    } else {
+      dualResponse.feedback.content = dualResponse.feedback.structuredContent;
+    }
+    
+    return dualResponse;
+  }
+
+  /**
+   * Generate feedback using backend API for standard mentors
+   */
+  private async generateBackendFeedback(
     request: AIFeedbackRequest, 
     mode: 'structured' | 'scratchpad',
     characterContext: string,
     feedbackStyle: { systemPrompt: string; temperature: number }
   ): Promise<string> {
     try {
+      console.log(`🚀 Generating ${mode} feedback via backend API for ${request.mentor.name}`);
+      
       const feedbackContent = await backendApiService.generateFeedback({
         scene_content: request.scene.content,
         mentor_id: request.mentor.id,
@@ -83,15 +173,88 @@ class AIFeedbackService {
       
       return this.cleanFeedbackContent(feedbackContent, mode, request.mentor);
     } catch (error) {
-      console.warn(`Failed to generate ${mode} feedback, using mock:`, error);
+      console.warn(`❌ Backend API failed for ${mode} feedback, using mock:`, error);
       return this.generateMockFeedback(request, mode);
     }
   }
+
+  /**
+   * Generate blended feedback using backend API with special blended processing
+   */
+  private async generateBlendedBackendFeedback(
+    request: AIFeedbackRequest,
+    mode: 'structured' | 'scratchpad',
+    characterContext: string,
+    mentors: Mentor[],
+    mentorWeights: Record<string, number>
+  ): Promise<string> {
+    try {
+      console.log(`🎭 Generating blended ${mode} feedback via backend API`);
+      
+      // Create enhanced system prompt for blended feedback
+      const blendedSystemPrompt = this.createBlendedSystemPrompt(mentors, mentorWeights, mode);
+      
+      const feedbackContent = await backendApiService.generateFeedback({
+        scene_content: request.scene.content,
+        mentor_id: 'blended',
+        character_context: characterContext,
+        feedback_mode: mode,
+        system_prompt: blendedSystemPrompt,
+        temperature: 0.7 // Balanced temperature for blended feedback
+      });
+      
+      return this.cleanBlendedFeedbackContent(feedbackContent, mode, mentors);
+    } catch (error) {
+      console.warn(`❌ Blended backend API failed for ${mode} feedback, using mock:`, error);
+      return this.generateBlendedMockFeedback(request, mode, mentors);
+    }
+  }
+
+  /**
+   * Create system prompt for blended feedback
+   */
+  private createBlendedSystemPrompt(
+    mentors: Mentor[],
+    mentorWeights: Record<string, number>,
+    mode: 'structured' | 'scratchpad'
+  ): string {
+    const mentorDescriptions = mentors.map(mentor => {
+      const weight = mentorWeights[mentor.id] || 5;
+      const weightPercentage = Math.round((weight / 10) * 100);
+      return `${mentor.name} (${weightPercentage}% influence): ${mentor.tone} - ${mentor.styleNotes}`;
+    }).join('\n');
+
+    const basePrompt = `You are a blended AI mentor combining insights from multiple industry experts. 
+
+MENTOR BLEND COMPOSITION:
+${mentorDescriptions}
+
+Your analysis should synthesize these perspectives, highlighting areas where mentors agree and noting where they might have different approaches. Provide comprehensive feedback that draws from each mentor's strengths while maintaining coherence.
+
+BLENDED ANALYSIS APPROACH:
+- Identify consensus points across mentoring styles
+- Note where different approaches might yield different insights
+- Provide balanced recommendations that consider multiple perspectives
+- Maintain the distinct voice and expertise of each contributing mentor
+- Create actionable advice that writers can implement
+
+${mode === 'scratchpad' ? 
+  'Format as informal, stream-of-consciousness notes that capture the collaborative thinking process of multiple mentors reviewing the script together.' :
+  'Format as structured, comprehensive analysis organized by key screenplay elements (Structure, Dialogue, Character, Pacing, Theme) with clear actionable recommendations.'
+}`;
+
+    return basePrompt;
+  }
   
   private cleanFeedbackContent(content: string, mode: 'structured' | 'scratchpad', mentor: Mentor): string {
-    // Add mentor's mantra at the end of the feedback
     const cleanedContent = content.trim();
     return `${cleanedContent}\n\n"${mentor.mantra}"`;
+  }
+
+  private cleanBlendedFeedbackContent(content: string, mode: 'structured' | 'scratchpad', mentors: Mentor[]): string {
+    const cleanedContent = content.trim();
+    const blendedMantra = "Multiple perspectives reveal the full picture.";
+    return `${cleanedContent}\n\n"${blendedMantra}"\n— Blended Mentoring Approach`;
   }
   
   /**
@@ -99,20 +262,12 @@ class AIFeedbackService {
    */
   private buildCharacterContext(characters: Record<string, Character>): string {
     try {
-      // Debug the incoming character data
       CharacterDataNormalizer.debugCharacterData(characters, 'aiFeedbackService.buildCharacterContext');
-      
-      // Use the normalizer to create safe character context
       const result = CharacterDataNormalizer.createCharacterContext(characters);
-      
       console.log('📝 Built character context:', result || 'No character context available');
       return result;
-      
     } catch (error) {
       console.error('❌ Error building character context:', error);
-      console.log('Characters object:', characters);
-      
-      // Ultimate fallback: create basic context from character names
       try {
         const characterNames = Object.keys(characters || {}).filter(name => name && name.trim());
         if (characterNames.length > 0) {
@@ -121,7 +276,6 @@ class AIFeedbackService {
       } catch {
         // Even the fallback failed
       }
-      
       return 'Character context unavailable due to processing error';
     }
   }
@@ -153,7 +307,6 @@ class AIFeedbackService {
       theme: ''
     };
     
-    // Split text into sections based on headers
     const sections = text.split(/###\s*/);
     
     sections.forEach(section => {
@@ -179,8 +332,8 @@ class AIFeedbackService {
   
   private cleanCategoryContent(content: string): string {
     return content
-      .replace(/^### /gm, '') // Remove section headers
-      .replace(/^\d+\.\s*/gm, '- ') // Convert numbered lists to bullet points
+      .replace(/^### /gm, '')
+      .replace(/^\d+\.\s*/gm, '- ')
       .trim();
   }
   
@@ -191,6 +344,16 @@ class AIFeedbackService {
       return this.generateEnhancedStructured(request);
     }
   }
+
+  private generateBlendedMockFeedback(request: AIFeedbackRequest, mode: 'structured' | 'scratchpad', mentors: Mentor[]): string {
+    const mentorNames = mentors.map(m => m.name).join(', ');
+    
+    if (mode === 'scratchpad') {
+      return `## Blended Mentor Scratchpad\n\n### Multi-Perspective Analysis\n• Combining insights from: ${mentorNames}\n• Each mentor brings unique expertise to this scene\n• Looking for consensus and divergent viewpoints\n\n### Collaborative Observations\n• Scene shows potential from multiple angles\n• Different mentors might emphasize different strengths\n• Comprehensive analysis reveals layered opportunities\n\n"Multiple perspectives reveal the full picture."\n— Blended Mentoring Approach`;
+    } else {
+      return `## Blended Mentor Analysis\n\n### Multi-Perspective Structure\n• Analysis combines ${mentors.length} mentoring approaches\n• Consensus points and divergent insights identified\n• Comprehensive coverage of screenplay elements\n\n### Blended Recommendations\n• Structural improvements from multiple viewpoints\n• Character development across different mentoring styles\n• Dialogue enhancement using diverse approaches\n• Pacing optimization considering various perspectives\n\n### Actionable Synthesis\n• **Consensus Priority**: Areas where all mentors agree need attention\n• **Balanced Approach**: Recommendations that satisfy multiple mentoring styles\n• **Comprehensive Coverage**: Full spectrum analysis of screenplay craft\n\n"Multiple perspectives reveal the full picture."\n— Blended Mentoring Approach`;
+    }
+  }
   
   private generateEnhancedDualFeedback(request: AIFeedbackRequest): Feedback {
     const structuredContent = this.generateEnhancedStructured(request);
@@ -198,12 +361,39 @@ class AIFeedbackService {
     
     return this.createDualFeedbackObject(structuredContent, scratchpadContent, request);
   }
+
+  private generateEnhancedBlendedMockFeedback(
+    scene: ScriptScene,
+    mentors: Mentor[],
+    characters: Record<string, Character>
+  ): Feedback {
+    const blendedRequest = {
+      scene,
+      mentor: {
+        id: 'blended',
+        name: 'Blended Mentors',
+        tone: `Combined insights from: ${mentors.map(m => m.name).join(', ')}`,
+        styleNotes: 'Multi-perspective analysis',
+        avatar: 'https://images.pexels.com/photos/7102/notes-macbook-study-conference.jpg?auto=compress&cs=tinysrgb&w=600',
+        accent: '#8b5cf6',
+        mantra: 'Multiple perspectives reveal the full picture.',
+        feedbackStyle: 'analytical' as const,
+        priorities: ['multi-perspective-analysis'],
+        analysisApproach: 'Blended approach'
+      },
+      characters
+    };
+
+    const structuredContent = this.generateBlendedMockFeedback(blendedRequest, 'structured', mentors);
+    const scratchpadContent = this.generateBlendedMockFeedback(blendedRequest, 'scratchpad', mentors);
+    
+    return this.createDualFeedbackObject(structuredContent, scratchpadContent, blendedRequest);
+  }
   
   private generateEnhancedScratchpad(request: AIFeedbackRequest): string {
     const mentorName = request.mentor.name.toUpperCase();
     const scene = request.scene.content;
     
-    // Analyze the actual scene content
     const hasSceneHeading = scene.includes('INT.') || scene.includes('EXT.');
     const hasDialogue = scene.split('\n').some(line => line.trim() && !line.includes('.') && line === line.toUpperCase());
     const wordCount = scene.split(' ').length;
@@ -213,7 +403,6 @@ class AIFeedbackService {
     const observations: string[] = [];
     const questions: string[] = [];
     
-    // Scene-specific analysis
     if (!hasSceneHeading) {
       observations.push("Missing scene heading creates immediate disorientation for the reader");
     }
@@ -226,7 +415,6 @@ class AIFeedbackService {
       observations.push("All action, no voice - are we missing character personality?");
     }
     
-    // Mentor-specific questions
     switch (request.mentor.id) {
       case 'tony-gilroy':
         questions.push("What's the central conflict driving this moment forward?");
@@ -258,6 +446,8 @@ class AIFeedbackService {
       });
     }
     
+    notes += `\n"${request.mentor.mantra}"`;
+    
     return notes;
   }
   
@@ -267,7 +457,6 @@ class AIFeedbackService {
     
     let feedback = `## ${mentor} Analysis\n\n`;
     
-    // Structure analysis
     feedback += "### Structure\n\n";
     if (!scene.includes('INT.') && !scene.includes('EXT.')) {
       feedback += "• Scene lacks proper heading, creating immediate reader confusion\n";
@@ -313,24 +502,9 @@ class AIFeedbackService {
     feedback += "• **Sharpen Character Objectives**: Make sure each character's want is clear and active\n";
     feedback += "• **Deepen Subtext**: Look for what characters aren't saying but are feeling\n";
     
-    return feedback;
-  }
-  
-  async generateFeedback(request: AIFeedbackRequest & { mode?: 'structured' | 'scratchpad' }): Promise<AIFeedbackResponse> {
-    // If legacy mode is specified, just return that content in the appropriate field
-    if (request.mode) {
-      const feedbackStyle = getMentorFeedbackStyle(request.mentor);
-      const characterContext = this.buildCharacterContext(request.characters);
-      const singleContent = await this.generateSingleFeedback(request, request.mode, characterContext, feedbackStyle);
-      const dualFeedback = request.mode === 'structured' 
-        ? this.createDualFeedbackObject(singleContent, '', request)
-        : this.createDualFeedbackObject('', singleContent, request);
-      
-      return { feedback: dualFeedback };
-    }
+    feedback += `\n"${request.mentor.mantra}"`;
     
-    // Default: generate both
-    return this.generateDualFeedback(request);
+    return feedback;
   }
 }
 

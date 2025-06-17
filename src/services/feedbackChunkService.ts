@@ -14,6 +14,7 @@ export interface ChunkProcessingProgress {
 export class FeedbackChunkService {
   /**
    * Generate feedback for all chunks in a script
+   * ALWAYS uses backend API via aiFeedbackService
    */
   async generateChunkedFeedback(
     chunks: ScriptChunk[],
@@ -21,7 +22,7 @@ export class FeedbackChunkService {
     characters: Record<string, Character>,
     onProgress?: (progress: ChunkProcessingProgress) => void
   ): Promise<ChunkedScriptFeedback> {
-    console.log('🧠 Starting chunked feedback generation:', {
+    console.log('🧠 Starting chunked feedback generation via backend API:', {
       mentor: mentor.name,
       chunkCount: chunks.length,
       strategy: chunks[0]?.chunkType || 'unknown'
@@ -48,12 +49,12 @@ export class FeedbackChunkService {
             totalChunks: chunks.length,
             chunkTitle: chunk.title,
             progress: Math.round((chunkIndex / chunks.length) * 100),
-            message: `Analyzing ${chunk.title}...`
+            message: `Analyzing ${chunk.title} via backend API...`
           });
         }
 
         try {
-          return await this.generateChunkFeedback(chunk, mentor, characters);
+          return await this.generateChunkFeedbackViaBackend(chunk, mentor, characters);
         } catch (error) {
           console.error(`❌ Failed to generate feedback for ${chunk.title}:`, error);
           // Return fallback feedback for failed chunks
@@ -74,7 +75,7 @@ export class FeedbackChunkService {
     const summary = await this.generateOverallSummary(chunks, chunkFeedbacks, mentor);
     
     const processingTime = Date.now() - startTime;
-    console.log('✅ Chunked feedback generation complete:', {
+    console.log('✅ Chunked feedback generation complete via backend API:', {
       mentor: mentor.name,
       chunksProcessed: chunkFeedbacks.length,
       processingTime: `${processingTime}ms`,
@@ -88,7 +89,7 @@ export class FeedbackChunkService {
         totalChunks: chunks.length,
         chunkTitle: 'Complete',
         progress: 100,
-        message: 'Analysis complete!'
+        message: 'Backend API analysis complete!'
       });
     }
 
@@ -103,14 +104,14 @@ export class FeedbackChunkService {
   }
 
   /**
-   * Generate feedback for a single chunk
+   * Generate feedback for a single chunk using backend API via aiFeedbackService
    */
-  private async generateChunkFeedback(
+  private async generateChunkFeedbackViaBackend(
     chunk: ScriptChunk,
     mentor: Mentor,
     characters: Record<string, Character>
   ): Promise<ChunkFeedback> {
-    console.log(`🎯 Generating feedback for ${chunk.title}...`);
+    console.log(`🎯 Generating feedback for ${chunk.title} via backend API...`);
 
     // Convert chunk to ScriptScene format for compatibility
     const chunkAsScene = {
@@ -124,7 +125,7 @@ export class FeedbackChunkService {
     const chunkCharacters = this.getChunkCharacters(chunk, characters);
 
     try {
-      // Generate dual feedback using existing service
+      // Generate dual feedback using aiFeedbackService (which now uses backend API)
       const dualFeedback = await aiFeedbackService.generateDualFeedback({
         scene: chunkAsScene,
         mentor,
@@ -141,7 +142,7 @@ export class FeedbackChunkService {
         categories: dualFeedback.feedback.categories
       };
     } catch (error) {
-      console.error(`❌ Chunk feedback generation failed for ${chunk.title}:`, error);
+      console.error(`❌ Backend API chunk feedback generation failed for ${chunk.title}:`, error);
       return this.createFallbackChunkFeedback(chunk, mentor);
     }
   }
@@ -287,7 +288,7 @@ export class FeedbackChunkService {
     const chunkType = chunks[0]?.chunkType || 'pages';
     const chunkCount = chunks.length;
     
-    let structureSummary = `Script analyzed in ${chunkCount} ${chunkType}-based sections. `;
+    let structureSummary = `Script analyzed in ${chunkCount} ${chunkType}-based sections via backend API. `;
     
     if (structuralIssues.length > 0) {
       structureSummary += `Common structural elements to address: ${structuralIssues.join(', ')}.`;
@@ -350,15 +351,15 @@ export class FeedbackChunkService {
     return {
       chunkId: chunk.id,
       chunkTitle: chunk.title,
-      structuredContent: `## ${mentor.name} Analysis - ${chunk.title}\n\n### Analysis Pending\n• This section requires detailed analysis\n• Please retry for comprehensive feedback\n\n"${mentor.mantra}"`,
-      scratchpadContent: `## ${mentor.name} Notes - ${chunk.title}\n\n### Initial Observation\n• Section needs full analysis for specific insights\n• Contains ${chunk.content.length} characters of content\n\n### Next Steps\n• Retry analysis for detailed feedback\n\n"${mentor.mantra}"`,
+      structuredContent: `## ${mentor.name} Analysis - ${chunk.title}\n\n### Analysis Pending\n• This section requires detailed backend API analysis\n• Please retry for comprehensive feedback\n\n"${mentor.mantra}"`,
+      scratchpadContent: `## ${mentor.name} Notes - ${chunk.title}\n\n### Initial Observation\n• Section needs full backend API analysis for specific insights\n• Contains ${chunk.content.length} characters of content\n\n### Next Steps\n• Retry analysis for detailed feedback\n\n"${mentor.mantra}"`,
       mentorId: mentor.id,
       timestamp: new Date(),
       categories: {
-        structure: 'Requires analysis',
-        dialogue: 'Requires analysis', 
-        pacing: 'Requires analysis',
-        theme: 'Requires analysis'
+        structure: 'Requires backend API analysis',
+        dialogue: 'Requires backend API analysis', 
+        pacing: 'Requires backend API analysis',
+        theme: 'Requires backend API analysis'
       }
     };
   }
