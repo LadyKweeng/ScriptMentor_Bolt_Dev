@@ -125,19 +125,17 @@ const App: React.FC = () => {
     }
   }, [session?.user?.id]); // Only depend on user ID, not the entire session object
 
-  // NEW: Cleanup effect to handle component unmount
+  // NEW: Cleanup effect to handle component unmount ONLY
   useEffect(() => {
     return () => {
-      // Cancel any ongoing processing when component unmounts
-      if (currentAbortController) {
-        currentAbortController.abort();
-      }
+      // Only cancel when component actually unmounts, not on every re-render
       if (progressiveFeedbackService.isCurrentlyProcessing()) {
+        console.log('🧹 Component unmounting - cleaning up processing');
         progressiveFeedbackService.cancelProcessing();
+        backendApiService.cancelAllRequests();
       }
-      backendApiService.cancelAllRequests();
     };
-  }, [currentAbortController]);
+  }, []); // Empty dependency array - only run on mount/unmount
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
