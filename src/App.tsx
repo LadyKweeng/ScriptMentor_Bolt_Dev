@@ -27,6 +27,7 @@ import { FeedbackGenerator } from './utils/feedbackGenerator';
 import { ScriptChunker } from './utils/scriptChunker';
 // REMOVED: ChunkProcessingProgress type import - no longer needed
 import { ProcessingProgress as ProgressiveProgressType, progressiveFeedbackService } from './services/progressiveFeedbackService';
+import { backendApiService } from './services/backendApiService';
 import { CharacterDataNormalizer } from './utils/characterDataNormalizer';
 import { BookOpenCheck, Files, Activity, BookText, BookOpen, BookMarked, BarChart3, Sparkles, ArrowDown, LogOut, Layers, FileText, RefreshCw } from 'lucide-react';
 import { processSceneText } from './utils/scriptFormatter';
@@ -77,6 +78,7 @@ const App: React.FC = () => {
   const [progressiveProgress, setProgressiveProgress] = useState<ProgressiveProgressType | null>(null);
   const [showProgressiveProgress, setShowProgressiveProgress] = useState(false);
   const [partialFeedback, setPartialFeedback] = useState<Feedback | null>(null);
+  const [currentAbortController, setCurrentAbortController] = useState<AbortController | null>(null); // NEW LINE
   
   // Library state - Fixed with proper state management
   const [showLibrary, setShowLibrary] = useState(false);
@@ -123,6 +125,20 @@ const App: React.FC = () => {
     }
   }, [session?.user?.id]); // Only depend on user ID, not the entire session object
 
+  // NEW: Cleanup effect to handle component unmount
+  useEffect(() => {
+    return () => {
+      // Cancel any ongoing processing when component unmounts
+      if (currentAbortController) {
+        currentAbortController.abort();
+      }
+      if (progressiveFeedbackService.isCurrentlyProcessing()) {
+        progressiveFeedbackService.cancelProcessing();
+      }
+      backendApiService.cancelAllRequests();
+    };
+  }, [currentAbortController]);
+
   const handleSignOut = async () => {
     await supabase.auth.signOut();
     setSession(null);
@@ -138,6 +154,65 @@ const App: React.FC = () => {
       return newState;
     });
   }, []); // Remove showLibrary dependency
+
+  /**
+   * ENHANCED CANCEL FUNCTION - Properly stops backend processing
+   */
+  const handleCancelProcessing = async () => {
+    console.log('🛑 User initiated cancel - stopping all processing...');
+
+    try {
+      // 1. Cancel the progressive feedback service
+      if (progressiveFeedbackService.isCurrentlyProcessing()) {
+        console.log('🛑 Cancelling progressive feedback service...');
+        progressiveFeedbackService.cancelProcessing();
+      }
+
+      // 2. Abort current abort controller if exists
+      if (currentAbortController) {
+        console.log('🛑 Aborting current controller...');
+        currentAbortController.abort();
+        setCurrentAbortController(null);
+      }
+
+      // 3. Cancel all backend API requests
+      const activeRequestCount = backendApiService.getActiveRequestCount();
+      if (activeRequestCount > 0) {
+        console.log(`🛑 Cancelling ${activeRequestCount} active backend requests...`);
+        backendApiService.cancelAllRequests();
+      }
+
+      // 4. Reset all UI state to pre-processing state
+      setShowProgressiveProgress(false);
+      setIsGeneratingFeedback(false);
+      setProgressiveProgress(null);
+      setPartialFeedback(null);
+
+      // 5. Reset writer suggestions state
+      setIsGeneratingWriterSuggestions(false);
+      setWriterSuggestionsStarted(false);
+      setWriterSuggestionsReady(false);
+      setShowWriterSuggestions(false);
+
+      // 6. Clear any partial feedback that might have been generated
+      // Note: Keep existing full feedback if it was already complete
+      if (partialFeedback && !feedback) {
+        setPartialFeedback(null);
+      }
+
+      console.log('✅ Processing cancellation completed successfully');
+
+    } catch (error) {
+      console.error('❌ Error during cancellation:', error);
+
+      // Even if there's an error, reset the UI state
+      setShowProgressiveProgress(false);
+      setIsGeneratingFeedback(false);
+      setProgressiveProgress(null);
+      setPartialFeedback(null);
+      setCurrentAbortController(null);
+    }
+  };
 
   if (!session) {
     return <Auth onAuthChange={setSession} />;
@@ -247,29 +322,76 @@ const App: React.FC = () => {
     }
   };
 
+  /**
+   * Enhanced feedback generation with proper cancellation support
+   */
   const handleSelectMentor = async (mentor: { id: string }, mode: FeedbackMode = feedbackMode) => {
+    console.log('🎬 Starting feedback generation with cancellation support...', {
+      mentor: mentor.id,
+      hasScript: !!currentScript,
+      hasScene: !!currentScene
+    });
+
     setSelectedMentorId(mentor.id);
     setFeedbackMode(mode);
-    
+
     const selectedMentor = mentors.find(m => m.id === mentor.id);
     if (!selectedMentor) return;
 
-    // Reset writer suggestions
+    // Reset all feedback-related state
     setWriterSuggestionsReady(false);
     setShowWriterSuggestions(false);
     setWriterSuggestionsStarted(false);
+    setPartialFeedback(null);
+    setFeedback(null);
 
-    if (currentScript && currentScript.chunks.length > 1) {
-      // Handle chunked script feedback
-      await handleChunkedFeedback(currentScript, selectedMentor);
-    } else if (currentScene) {
-      // Handle single scene feedback
-      await handleSingleSceneFeedback(currentScene, selectedMentor);
+    // Create new abort controller for this operation
+    const abortController = new AbortController();
+    setCurrentAbortController(abortController);
+
+    // Set up processing state
+    setIsGeneratingFeedback(true);
+    setShowProgressiveProgress(true);
+
+    try {
+      if (currentScript && currentScript.chunks.length > 1) {
+        // Handle chunked script feedback
+        await handleChunkedFeedback(currentScript, selectedMentor, abortController);
+      } else if (currentScene) {
+        // Handle single scene feedback
+        await handleSingleSceneFeedback(currentScene, selectedMentor, abortController);
+      }
+    } catch (error: any) {
+      if (error.message?.includes('cancelled') || error.message?.includes('aborted')) {
+        console.log('✅ Feedback generation was cancelled by user');
+        // State is already reset by handleCancelProcessing
+        return;
+      } else {
+        console.error('❌ Feedback generation failed:', error);
+        // Handle other errors appropriately
+        setFeedback(null);
+        setPartialFeedback(null);
+      }
+    } finally {
+      // Clean up only if not cancelled (cancelled state is handled by handleCancelProcessing)
+      if (!abortController.signal.aborted) {
+        setIsGeneratingFeedback(false);
+        setShowProgressiveProgress(false);
+        setProgressiveProgress(null);
+        setCurrentAbortController(null);
+      }
     }
   };
 
   // UNIFIED: Chunked feedback uses progressive processing
-  const handleChunkedFeedback = async (script: FullScript, mentor: any) => {
+  /**
+   * Enhanced chunked feedback with cancellation support
+   */
+  const handleChunkedFeedback = async (
+    script: FullScript, 
+    mentor: any, 
+    abortController: AbortController
+  ) => {
     setIsGeneratingFeedback(true);
     setShowProgressiveProgress(true);
     setPartialFeedback(null);
@@ -301,9 +423,10 @@ const App: React.FC = () => {
               summary: {
                 overallStructure: `Processing ${progress.currentChunk}/${progress.totalChunks} sections...`,
                 keyStrengths: ['Progressive analysis in progress'],
-                majorIssues: progress.failedChunks.length > 0 ? 
-                  [`${progress.failedChunks.length} sections encountered processing issues`] : [],
-                globalRecommendations: ['Analysis in progress - partial results available']
+                majorIssues: progress.failedChunks.length > 0 
+                  ? [`${progress.failedChunks.length} sections encountered issues`]
+                  : [],
+                globalRecommendations: ['Review will be complete when all sections finish processing']
               }
             } as any;
             
@@ -315,58 +438,64 @@ const App: React.FC = () => {
           retryAttempts: 3,
           baseDelay: 3000,
           exponentialBackoff: true,
-          showPartialResults: true
+          showPartialResults: true,
+          processingType: 'chunked',
+          abortSignal: abortController.signal // NEW LINE: Pass abort signal
         }
       );
       
-      // Convert to the expected feedback format
-      const finalFeedback = {
-        id: newFeedback.id,
-        mentorId: mentor.id,
-        sceneId: script.id,
-        timestamp: newFeedback.timestamp,
-        isChunked: true,
-        chunks: newFeedback.chunks,
-        summary: newFeedback.summary,
-        processingStats: (newFeedback as any).processingStats
-      } as any;
-      
-      setFeedback(finalFeedback);
-      setPartialFeedback(null); // Clear partial feedback
-      setRewrite(null);
-      setDiffLines([]);
-      
-      console.log('✅ Progressive chunked feedback generation complete', {
-        totalChunks: newFeedback.chunks.length,
-        successful: (newFeedback as any).processingStats?.successfulChunks,
-        failed: (newFeedback as any).processingStats?.failedChunks
-      });
-      
-      // Start writer suggestions for the currently selected chunk
-      if (selectedChunkId) {
-        const selectedChunk = script.chunks.find(c => c.id === selectedChunkId);
-        const chunkFeedback = newFeedback.chunks.find(cf => cf.chunkId === selectedChunkId);
+      // Only set final feedback if not cancelled
+      if (!abortController.signal.aborted) {
+        const finalFeedback = {
+          id: newFeedback.id,
+          mentorId: mentor.id,
+          sceneId: script.id,
+          timestamp: newFeedback.timestamp,
+          isChunked: true,
+          chunks: newFeedback.chunks,
+          summary: newFeedback.summary,
+          processingStats: (newFeedback as any).processingStats
+        } as any;
         
-        if (selectedChunk && chunkFeedback && !(chunkFeedback as any).processingError) {
-          setIsGeneratingWriterSuggestions(true);
-          setWriterSuggestionsStarted(true);
-          generateWriterSuggestionsInBackground(selectedChunk, finalFeedback);
+        setFeedback(finalFeedback);
+        setPartialFeedback(null);
+        setRewrite(null);
+        setDiffLines([]);
+        
+        console.log('✅ Progressive chunked feedback complete');
+        
+        // Start writer suggestions in background (with cancellation support)
+        if (!abortController.signal.aborted && selectedChunkId) {
+          const selectedChunk = script.chunks.find(c => c.id === selectedChunkId);
+          const chunkFeedback = newFeedback.chunks.find(cf => cf.chunkId === selectedChunkId);
+          
+          if (selectedChunk && chunkFeedback && !(chunkFeedback as any).processingError) {
+            setIsGeneratingWriterSuggestions(true);
+            setWriterSuggestionsStarted(true);
+            generateWriterSuggestionsInBackground(selectedChunk, finalFeedback, abortController);
+          }
         }
       }
       
-    } catch (error) {
-      console.error('❌ Progressive chunked feedback generation failed:', error);
-      setFeedback(null);
-      setPartialFeedback(null);
-    } finally {
-      setIsGeneratingFeedback(false);
-      setShowProgressiveProgress(false);
-      setProgressiveProgress(null);
+   } catch (error: any) {
+      if (!abortController.signal.aborted) {
+        console.error('❌ Progressive chunked feedback failed:', error);
+        setFeedback(null);
+        setPartialFeedback(null);
+      }
+      throw error; // Re-throw to be handled by caller
     }
   };
 
   // UNIFIED: Single scene feedback now uses progressive processing
-  const handleSingleSceneFeedback = async (scene: ScriptScene, mentor: any) => {
+  /**
+   * Enhanced single scene feedback with cancellation support
+   */
+  const handleSingleSceneFeedback = async (
+    scene: ScriptScene, 
+    mentor: any, 
+    abortController: AbortController
+  ) => {
     setIsGeneratingFeedback(true);
     setShowProgressiveProgress(true);
     setPartialFeedback(null);
@@ -390,7 +519,7 @@ const App: React.FC = () => {
 
       // Use progressive feedback service for consistency
       const newFeedback = await progressiveFeedbackService.processChunksProgressively(
-        [sceneAsChunk], // Single scene as array of one chunk
+        [sceneAsChunk],
         mentor,
         characters,
         (progress) => {
@@ -423,53 +552,65 @@ const App: React.FC = () => {
           baseDelay: 2000,
           exponentialBackoff: true,
           showPartialResults: true,
-          processingType: 'single'
+          processingType: 'single',
+          abortSignal: abortController.signal // NEW LINE: Pass abort signal
         }
       );
       
       // Convert chunked feedback back to single scene feedback format
-      const chunkFeedback = newFeedback.chunks[0];
-      const finalFeedback = {
-        id: newFeedback.id,
-        mentorId: mentor.id,
-        sceneId: scene.id,
-        timestamp: newFeedback.timestamp,
-        isChunked: false,
-        structuredContent: chunkFeedback?.structuredContent || '',
-        scratchpadContent: chunkFeedback?.scratchpadContent || '',
-        categories: chunkFeedback?.categories || {
-          structure: 'Analyzed',
-          dialogue: 'Analyzed',
-          pacing: 'Analyzed',
-          theme: 'Analyzed'
+      // Only set final feedback if not cancelled
+      if (!abortController.signal.aborted) {
+        const chunkFeedback = newFeedback.chunks[0];
+        const finalFeedback = {
+          id: newFeedback.id,
+          mentorId: mentor.id,
+          sceneId: scene.id,
+          timestamp: newFeedback.timestamp,
+          isChunked: false,
+          structuredContent: chunkFeedback?.structuredContent || '',
+          scratchpadContent: chunkFeedback?.scratchpadContent || '',
+          categories: chunkFeedback?.categories || {
+            structure: 'Analyzed',
+            dialogue: 'Analyzed',
+            pacing: 'Analyzed',
+            theme: 'Analyzed'
+          }
+        } as Feedback;
+        
+        setFeedback(finalFeedback);
+        setPartialFeedback(null);
+        setRewrite(null);
+        setDiffLines([]);
+        
+        console.log('✅ Progressive single scene feedback complete');
+        
+        // Start writer suggestions in background (with cancellation support)
+        if (!abortController.signal.aborted) {
+          setIsGeneratingWriterSuggestions(true);
+          setWriterSuggestionsStarted(true);
+          generateWriterSuggestionsInBackground(scene, finalFeedback, abortController);
         }
-      } as Feedback;
+      }
       
-      setFeedback(finalFeedback);
-      setPartialFeedback(null);
-      setRewrite(null);
-      setDiffLines([]);
-      
-      console.log('✅ Progressive single scene feedback complete');
-      
-      // Start writer suggestions in background
-      setIsGeneratingWriterSuggestions(true);
-      setWriterSuggestionsStarted(true);
-      generateWriterSuggestionsInBackground(scene, finalFeedback);
-      
-    } catch (error) {
-      console.error('❌ Progressive single scene feedback failed:', error);
-      setFeedback(null);
-      setPartialFeedback(null);
-    } finally {
-      setIsGeneratingFeedback(false);
-      setShowProgressiveProgress(false);
-      setProgressiveProgress(null);
+    } catch (error: any) {
+      if (!abortController.signal.aborted) {
+        console.error('❌ Progressive single scene feedback failed:', error);
+        setFeedback(null);
+        setPartialFeedback(null);
+      }
+      throw error; // Re-throw to be handled by caller
     }
   };
 
   // This fixes the state update issue inside the setTimeout
-  const generateWriterSuggestionsInBackground = async (scene: ScriptScene | ScriptChunk, feedback: Feedback) => {
+  /**
+   * Enhanced writer suggestions with cancellation support
+   */
+  const generateWriterSuggestionsInBackground = async (
+    scene: ScriptScene | ScriptChunk, 
+    feedback: Feedback,
+    abortController: AbortController
+  ) => {
     try {
       console.log('🎨 Background: Preparing writer suggestions generation...', {
         sceneType: 'chunkType' in scene ? 'chunk' : 'scene',
@@ -511,7 +652,20 @@ const App: React.FC = () => {
       console.log('⏰ Writer suggestions timeout scheduled for', preparationTime + 'ms');
       
       // CRITICAL FIX: Use setTimeout with proper state updates
+      // Check for cancellation before starting
+      if (abortController.signal.aborted) {
+        console.log('🛑 Writer suggestions cancelled before starting');
+        return;
+      }
+
+      // Use setTimeout with cancellation check
       setTimeout(() => {
+        // Check for cancellation when timeout executes
+        if (abortController.signal.aborted) {
+          console.log('🛑 Writer suggestions cancelled during timeout');
+          return;
+        }
+
         const generationTime = Date.now() - startTime;
         
         console.log('✅ Background: Writer suggestions ready!', {
@@ -521,8 +675,6 @@ const App: React.FC = () => {
           isBlended: feedback.mentorId === 'blended'
         });
         
-        // FIXED: Always update state without conditional checks
-        // This was the bug - the conditional check was preventing state updates
         console.log('🔄 Updating writer suggestions state...');
         setIsGeneratingWriterSuggestions(false);
         setWriterSuggestionsReady(true);
@@ -1307,12 +1459,7 @@ const App: React.FC = () => {
         <ProgressiveProcessingProgress
           progress={progressiveProgress}
           mentor={selectedMentor}
-          onCancel={() => {
-            setShowProgressiveProgress(false);
-            setIsGeneratingFeedback(false);
-            setProgressiveProgress(null);
-            setPartialFeedback(null);
-          }}
+          onCancel={handleCancelProcessing}
         />
       )}
       

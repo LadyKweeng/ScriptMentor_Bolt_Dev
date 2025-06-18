@@ -1,3 +1,4 @@
+// src/services/backendApiService.ts - Complete enhanced version with cancellation support
 import { Feedback } from '../types';
 
 interface BackendFeedbackRequest {
@@ -20,12 +21,20 @@ interface BackendFeedbackResponse {
 
 class BackendApiService {
   private baseUrl: string;
+  private activeRequests: Map<string, AbortController> = new Map(); // NEW: Request tracking
 
   constructor() {
     this.baseUrl = 'https://smbackend-production.up.railway.app/api';
   }
 
-  async generateFeedback(request: BackendFeedbackRequest): Promise<string> {
+  /**
+   * Generate feedback with optional cancellation support
+   * ENHANCED: Now supports AbortSignal while preserving all original functionality
+   */
+  async generateFeedback(
+    request: BackendFeedbackRequest, 
+    abortSignal?: AbortSignal // NEW: Optional abort signal
+  ): Promise<string> {
     try {
       const enhancedRequest = {
         ...request,
@@ -35,16 +44,37 @@ class BackendApiService {
       console.log('🚀 Sending enhanced feedback request:', {
         mentor_id: request.mentor_id,
         mode: request.feedback_mode,
-        scene_length: request.scene_content.length
+        scene_length: request.scene_content.length,
+        canCancel: !!abortSignal // NEW: Log cancellation capability
       });
+
+      // NEW: Create abort controller if signal provided
+      const controller = new AbortController();
+      const requestId = `${request.mentor_id}-${Date.now()}`;
+      
+      // NEW: Store controller for potential cancellation
+      if (abortSignal) {
+        this.activeRequests.set(requestId, controller);
+        
+        // Listen for external abort signal
+        abortSignal.addEventListener('abort', () => {
+          console.log('🛑 Aborting backend request:', requestId);
+          controller.abort();
+          this.activeRequests.delete(requestId);
+        });
+      }
 
       const response = await fetch(`${this.baseUrl}/generate-feedback`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(enhancedRequest)
+        body: JSON.stringify(enhancedRequest),
+        signal: controller.signal // NEW: Add abort signal to fetch
       });
+
+      // NEW: Clean up request tracking
+      this.activeRequests.delete(requestId);
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
@@ -61,11 +91,20 @@ class BackendApiService {
       return data.feedback;
 
     } catch (error) {
+      // NEW: Handle abort errors specifically
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.log('🛑 Backend request was cancelled');
+        throw new Error('Request cancelled by user');
+      }
+      
       console.error('❌ Backend API call failed:', error);
       throw error;
     }
   }
 
+  /**
+   * PRESERVED: Original formatting instructions method
+   */
   private getFormattingInstructions(mode: 'structured' | 'scratchpad'): string {
     if (mode === 'scratchpad') {
       return `
@@ -129,15 +168,24 @@ EXAMPLE FORMAT:
     }
   }
 
+  /**
+   * PRESERVED: Original health check method with enhanced cancellation support
+   */
   async healthCheck(): Promise<boolean> {
     try {
+      // NEW: Add timeout to prevent hanging
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+      
       const response = await fetch(`${this.baseUrl}/health`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
-        }
+        },
+        signal: controller.signal // NEW: Add abort signal
       });
       
+      clearTimeout(timeoutId);
       const isHealthy = response.ok;
       
       if (isHealthy) {
@@ -147,16 +195,31 @@ EXAMPLE FORMAT:
       
       return isHealthy;
     } catch (error) {
-      console.warn('🔴 Backend health check failed:', error);
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.warn('🔴 Backend health check timed out');
+      } else {
+        console.warn('🔴 Backend health check failed:', error);
+      }
       return false;
     }
   }
 
+  /**
+   * PRESERVED: Original test connection method
+   */
   async testConnection(): Promise<{ success: boolean; message: string; data?: any }> {
     try {
       console.log('🔍 Testing backend connection...');
       
-      const response = await fetch(`${this.baseUrl}/health`);
+      // NEW: Add timeout for connection test
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+      
+      const response = await fetch(`${this.baseUrl}/health`, {
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
       
       if (!response.ok) {
         return {
@@ -172,6 +235,13 @@ EXAMPLE FORMAT:
         data
       };
     } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        return {
+          success: false,
+          message: 'Connection test timed out'
+        };
+      }
+      
       return {
         success: false,
         message: `Connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`
@@ -179,6 +249,9 @@ EXAMPLE FORMAT:
     }
   }
 
+  /**
+   * PRESERVED: Original test feedback generation method
+   */
   async testFeedbackGeneration(): Promise<{ success: boolean; message: string; feedback?: string }> {
     try {
       console.log('🧪 Testing feedback generation...');
@@ -211,6 +284,55 @@ Come on... just write something.`,
         message: `Feedback test failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       };
     }
+  }
+
+  /**
+   * NEW: Cancel all active requests
+   */
+  cancelAllRequests(): void {
+    console.log(`🛑 Cancelling ${this.activeRequests.size} active backend requests`);
+    
+    this.activeRequests.forEach((controller, requestId) => {
+      console.log(`🛑 Aborting request: ${requestId}`);
+      controller.abort();
+    });
+    
+    this.activeRequests.clear();
+  }
+
+  /**
+   * NEW: Get count of active requests
+   */
+  getActiveRequestCount(): number {
+    return this.activeRequests.size;
+  }
+
+  /**
+   * NEW: Cancel a specific request by ID
+   */
+  cancelRequest(requestId: string): boolean {
+    const controller = this.activeRequests.get(requestId);
+    if (controller) {
+      console.log(`🛑 Cancelling specific request: ${requestId}`);
+      controller.abort();
+      this.activeRequests.delete(requestId);
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * NEW: Get list of active request IDs
+   */
+  getActiveRequestIds(): string[] {
+    return Array.from(this.activeRequests.keys());
+  }
+
+  /**
+   * NEW: Check if a specific request is active
+   */
+  isRequestActive(requestId: string): boolean {
+    return this.activeRequests.has(requestId);
   }
 }
 

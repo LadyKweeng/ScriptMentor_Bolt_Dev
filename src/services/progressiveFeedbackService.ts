@@ -1,4 +1,4 @@
-// src/services/progressiveFeedbackService.ts
+// src/services/progressiveFeedbackService.ts - Complete enhanced version with cancellation support
 import { ScriptChunk, ChunkFeedback, ChunkedScriptFeedback, Mentor, Character, ScriptScene, Feedback, MentorWeights } from '../types';
 import { aiFeedbackService } from './aiFeedbackService';
 import { FeedbackGenerator } from '../utils/feedbackGenerator';
@@ -30,6 +30,7 @@ export interface ProgressiveProcessingOptions {
   exponentialBackoff: boolean;
   showPartialResults: boolean;
   processingType?: 'chunked' | 'single' | 'blended';
+  abortSignal?: AbortSignal; // NEW: Add abort signal support
 }
 
 export class ProgressiveFeedbackService {
@@ -43,6 +44,8 @@ export class ProgressiveFeedbackService {
   };
 
   private feedbackGenerator: FeedbackGenerator;
+  private isProcessing: boolean = false; // NEW: Track processing state
+  private currentAbortController: AbortController | null = null; // NEW: Current abort controller
 
   constructor() {
     // Initialize with empty character manager - will be updated per call
@@ -53,6 +56,7 @@ export class ProgressiveFeedbackService {
    * UNIFIED PROCESSING METHOD: Handles chunked, single scene, and blended feedback
    * Uses the same progressive UI for all feedback types
    * ALWAYS uses backend API for ALL modes
+   * ENHANCED: Now with cancellation support
    */
   async processChunksProgressively(
     chunks: ScriptChunk[],
@@ -62,158 +66,243 @@ export class ProgressiveFeedbackService {
     options: Partial<ProgressiveProcessingOptions> = {}
   ): Promise<ChunkedScriptFeedback> {
     const config = { ...this.defaultOptions, ...options };
+    
+    // NEW: Set up cancellation support
+    this.currentAbortController = new AbortController();
+    const abortSignal = config.abortSignal || this.currentAbortController.signal;
+    
+    // NEW: Listen for external abort signal
+    if (config.abortSignal) {
+      config.abortSignal.addEventListener('abort', () => {
+        console.log('🛑 External abort signal received, stopping processing...');
+        this.cancelProcessing();
+      });
+    }
+
+    this.isProcessing = true; // NEW: Set processing state
     const completedChunks: ChunkFeedback[] = [];
     const failedChunks: string[] = [];
     
     // Determine processing type based on chunks and mentor
     const processingType = this.determineProcessingType(chunks, mentor, config);
     
-    console.log('🚀 Starting unified progressive feedback processing with backend API...', {
+    console.log('🚀 Starting unified progressive feedback processing with backend API and cancellation support...', {
       mentor: mentor.name,
       chunkCount: chunks.length,
       processingType,
-      config
+      config,
+      canCancel: !!abortSignal
     });
 
     // Update character manager for this processing session
     this.feedbackGenerator = new FeedbackGenerator(new CharacterMemoryManager(characters));
 
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      let success = false;
-      let retryCount = 0;
-      let lastError: any = null;
+    try {
+      for (let i = 0; i < chunks.length; i++) {
+        // NEW: Check for cancellation before processing each chunk
+        if (abortSignal.aborted) {
+          console.log('🛑 Processing cancelled before chunk', i + 1);
+          throw new Error('Processing cancelled by user');
+        }
 
-      while (!success && retryCount <= config.retryAttempts) {
-        try {
-          // Update progress with processing type specific messaging
-          const progressMessage = this.generateProgressMessage(chunk, retryCount, processingType, mentor);
-          
-          onProgress({
-            currentChunk: i + 1,
-            totalChunks: chunks.length,
-            chunkTitle: chunk.title,
-            progress: Math.round((i / chunks.length) * 100),
-            message: progressMessage,
-            isRetrying: retryCount > 0,
-            retryCount,
-            completedChunks: [...completedChunks],
-            failedChunks: [...failedChunks],
-            processingType,
-            mentorCount: processingType === 'blended' ? 1 : undefined,
-            blendingMentors: processingType === 'blended' ? [mentor.name] : undefined
-          });
+        const chunk = chunks[i];
+        let success = false;
+        let retryCount = 0;
+        let lastError: any = null;
 
-          // Process chunk based on type - ALL use backend API
-          let chunkFeedback: ChunkFeedback;
-
-          if (processingType === 'blended') {
-            chunkFeedback = await this.processBlendedChunkViaBackend(chunk, mentor, characters, retryCount);
-          } else if (processingType === 'single') {
-            chunkFeedback = await this.processSingleSceneChunkViaBackend(chunk, mentor, characters, retryCount);
-          } else {
-            chunkFeedback = await this.processChunkViaBackend(chunk, mentor, characters, retryCount);
-          }
-          
-          completedChunks.push(chunkFeedback);
-          success = true;
-
-          console.log(`✅ ${processingType} chunk processed via backend API: ${chunk.title} (attempt ${retryCount + 1})`);
-
-          // Add delay between chunks to respect rate limits
-          if (i < chunks.length - 1) {
-            const delay = this.calculateDelay(retryCount, config);
-            await this.sleep(delay);
-          }
-
-        } catch (error: any) {
-          lastError = error;
-          retryCount++;
-
-          if (this.isRateLimitError(error)) {
-            console.log(`🚨 Rate limit hit for ${chunk.title} (attempt ${retryCount}/${config.retryAttempts + 1})`);
+        while (!success && retryCount <= config.retryAttempts && !abortSignal.aborted) {
+          try {
+            // Update progress with processing type specific messaging
+            const progressMessage = this.generateProgressMessage(chunk, retryCount, processingType, mentor);
             
-            if (retryCount <= config.retryAttempts) {
-              const retryDelay = this.calculateRetryDelay(retryCount, config);
-              
-              onProgress({
-                currentChunk: i + 1,
-                totalChunks: chunks.length,
-                chunkTitle: chunk.title,
-                progress: Math.round((i / chunks.length) * 100),
-                message: `Rate limit hit - retrying in ${Math.round(retryDelay / 1000)}s...`,
-                isRetrying: true,
-                retryCount,
-                nextRetryIn: retryDelay,
-                completedChunks: [...completedChunks],
-                failedChunks: [...failedChunks],
-                processingType
-              });
+            onProgress({
+              currentChunk: i + 1,
+              totalChunks: chunks.length,
+              chunkTitle: chunk.title,
+              progress: Math.round((i / chunks.length) * 100),
+              message: progressMessage,
+              isRetrying: retryCount > 0,
+              retryCount,
+              completedChunks: [...completedChunks],
+              failedChunks: [...failedChunks],
+              processingType,
+              mentorCount: processingType === 'blended' ? 1 : undefined,
+              blendingMentors: processingType === 'blended' ? [mentor.name] : undefined
+            });
 
-              await this.sleep(retryDelay);
+            // Process chunk based on type - ALL use backend API with cancellation support
+            let chunkFeedback: ChunkFeedback;
+
+            if (processingType === 'blended') {
+              chunkFeedback = await this.processBlendedChunkViaBackend(chunk, mentor, characters, retryCount, abortSignal);
+            } else if (processingType === 'single') {
+              chunkFeedback = await this.processSingleSceneChunkViaBackend(chunk, mentor, characters, retryCount, abortSignal);
+            } else {
+              chunkFeedback = await this.processChunkViaBackend(chunk, mentor, characters, retryCount, abortSignal);
             }
-          } else {
-            console.error(`❌ Non-rate-limit error for ${chunk.title}:`, error);
-            break; // Don't retry non-rate-limit errors
+            
+            completedChunks.push(chunkFeedback);
+            success = true;
+
+            console.log(`✅ ${processingType} chunk processed via backend API: ${chunk.title} (attempt ${retryCount + 1})`);
+
+            // Add delay between chunks to respect rate limits (with cancellation support)
+            if (i < chunks.length - 1 && !abortSignal.aborted) {
+              const delay = this.calculateDelay(retryCount, config);
+              await this.sleepWithCancellation(delay, abortSignal);
+            }
+
+          } catch (error: any) {
+            // NEW: Handle cancellation errors
+            if (abortSignal.aborted || error.message?.includes('cancelled')) {
+              console.log('🛑 Chunk processing cancelled');
+              throw new Error('Processing cancelled by user');
+            }
+
+            lastError = error;
+            retryCount++;
+
+            if (this.isRateLimitError(error)) {
+              console.log(`🚨 Rate limit hit for ${chunk.title} (attempt ${retryCount}/${config.retryAttempts + 1})`);
+              
+              if (retryCount <= config.retryAttempts) {
+                const retryDelay = this.calculateRetryDelay(retryCount, config);
+                
+                onProgress({
+                  currentChunk: i + 1,
+                  totalChunks: chunks.length,
+                  chunkTitle: chunk.title,
+                  progress: Math.round((i / chunks.length) * 100),
+                  message: `Rate limit hit - retrying in ${Math.round(retryDelay / 1000)}s...`,
+                  isRetrying: true,
+                  retryCount,
+                  nextRetryIn: retryDelay,
+                  completedChunks: [...completedChunks],
+                  failedChunks: [...failedChunks],
+                  processingType
+                });
+
+                await this.sleepWithCancellation(retryDelay, abortSignal);
+              }
+            } else {
+              console.error(`❌ Non-rate-limit error for ${chunk.title}:`, error);
+              break; // Don't retry non-rate-limit errors
+            }
           }
+        }
+
+        // If chunk failed after all retries, create fallback feedback (if not cancelled)
+        if (!success && !abortSignal.aborted) {
+          console.warn(`⚠️ Creating fallback feedback for failed chunk: ${chunk.title}`);
+          const fallbackFeedback = this.createFallbackChunkFeedback(chunk, mentor, lastError, retryCount - 1);
+          completedChunks.push(fallbackFeedback);
+          failedChunks.push(chunk.id);
         }
       }
 
-      // If chunk failed after all retries, create fallback feedback
-      if (!success) {
-        console.warn(`⚠️ Creating fallback feedback for failed chunk: ${chunk.title}`);
-        const fallbackFeedback = this.createFallbackChunkFeedback(chunk, mentor, lastError, retryCount - 1);
-        completedChunks.push(fallbackFeedback);
-        failedChunks.push(chunk.id);
+      // Generate final summary (if not cancelled)
+      if (!abortSignal.aborted) {
+        const summary = await this.generateProgressiveSummary(chunks, completedChunks, mentor, processingType);
+
+        // Calculate final statistics
+        const realSuccessfulChunks = completedChunks.filter(chunk => 
+          !(chunk as any).processingError
+        ).length;
+        
+        const rateLimitedChunks = completedChunks.filter(chunk => 
+          (chunk as any).processingError === 'rate limit'
+        ).length;
+
+        // Final progress update
+        onProgress({
+          currentChunk: chunks.length,
+          totalChunks: chunks.length,
+          chunkTitle: 'Complete',
+          progress: 100,
+          message: this.generateFinalMessage(realSuccessfulChunks, chunks.length, rateLimitedChunks, processingType),
+          completedChunks,
+          failedChunks,
+          processingType
+        });
+
+        return {
+          id: `progressive_feedback_${Date.now()}`,
+          scriptId: chunks[0]?.id.split('_chunk_')[0] || 'unknown',
+          mentorId: mentor.id,
+          chunks: completedChunks,
+          summary,
+          timestamp: new Date(),
+          processingStats: {
+            totalChunks: chunks.length,
+            successfulChunks: realSuccessfulChunks,
+            rateLimitedChunks: rateLimitedChunks,
+            permanentlyFailedChunks: failedChunks.length,
+            totalRetryAttempts: completedChunks.reduce((sum, chunk) => 
+              sum + ((chunk as any).retryCount || 0), 0),
+            processingType
+          }
+        };
+      } else {
+        throw new Error('Processing cancelled by user');
       }
+
+    } catch (error: any) {
+      // NEW: Handle cancellation gracefully
+      if (abortSignal.aborted || error.message?.includes('cancelled')) {
+        console.log('🛑 Progressive processing was cancelled');
+        
+        // Return partial results if any chunks were completed
+        if (completedChunks.length > 0) {
+          const partialSummary = await this.generateProgressiveSummary(
+            chunks.slice(0, completedChunks.length), 
+            completedChunks, 
+            mentor, 
+            processingType
+          );
+
+          return {
+            id: `cancelled_feedback_${Date.now()}`,
+            scriptId: chunks[0]?.id.split('_chunk_')[0] || 'unknown',
+            mentorId: mentor.id,
+            chunks: completedChunks,
+            summary: {
+              ...partialSummary,
+              overallStructure: `Processing cancelled after ${completedChunks.length}/${chunks.length} sections. ${partialSummary.overallStructure}`,
+              majorIssues: [
+                'Processing was cancelled by user',
+                `${chunks.length - completedChunks.length} sections were not processed`,
+                ...partialSummary.majorIssues
+              ]
+            },
+            timestamp: new Date(),
+            processingStats: {
+              totalChunks: chunks.length,
+              successfulChunks: completedChunks.filter(chunk => !(chunk as any).processingError).length,
+              rateLimitedChunks: completedChunks.filter(chunk => (chunk as any).processingError === 'rate limit').length,
+              permanentlyFailedChunks: failedChunks.length,
+              totalRetryAttempts: completedChunks.reduce((sum, chunk) => sum + ((chunk as any).retryCount || 0), 0),
+              processingType,
+              cancelled: true
+            }
+          };
+        }
+        
+        throw error;
+      }
+      
+      console.error('❌ Progressive processing failed:', error);
+      throw error;
+    } finally {
+      // NEW: Cleanup
+      this.isProcessing = false;
+      this.currentAbortController = null;
     }
-
-    // Generate final summary
-    const summary = await this.generateProgressiveSummary(chunks, completedChunks, mentor, processingType);
-
-    // Calculate final statistics
-    const realSuccessfulChunks = completedChunks.filter(chunk => 
-      !(chunk as any).processingError
-    ).length;
-    
-    const rateLimitedChunks = completedChunks.filter(chunk => 
-      (chunk as any).processingError === 'rate limit'
-    ).length;
-
-    // Final progress update
-    onProgress({
-      currentChunk: chunks.length,
-      totalChunks: chunks.length,
-      chunkTitle: 'Complete',
-      progress: 100,
-      message: this.generateFinalMessage(realSuccessfulChunks, chunks.length, rateLimitedChunks, processingType),
-      completedChunks,
-      failedChunks,
-      processingType
-    });
-
-    return {
-      id: `progressive_feedback_${Date.now()}`,
-      scriptId: chunks[0]?.id.split('_chunk_')[0] || 'unknown',
-      mentorId: mentor.id,
-      chunks: completedChunks,
-      summary,
-      timestamp: new Date(),
-      processingStats: {
-        totalChunks: chunks.length,
-        successfulChunks: realSuccessfulChunks,
-        rateLimitedChunks: rateLimitedChunks,
-        permanentlyFailedChunks: failedChunks.length,
-        totalRetryAttempts: completedChunks.reduce((sum, chunk) => 
-          sum + ((chunk as any).retryCount || 0), 0),
-        processingType
-      }
-    };
   }
 
   /**
    * Enhanced method for processing true blended feedback from multiple mentors
    * ALWAYS uses backend API
+   * ENHANCED: Now with cancellation support
    */
   async processBlendedFeedback(
     chunks: ScriptChunk[],
@@ -224,162 +313,297 @@ export class ProgressiveFeedbackService {
     options: Partial<ProgressiveProcessingOptions> = {}
   ): Promise<ChunkedScriptFeedback> {
     const config = { ...this.defaultOptions, ...options, processingType: 'blended' as const };
+    
+    // NEW: Set up cancellation support
+    this.currentAbortController = new AbortController();
+    const abortSignal = config.abortSignal || this.currentAbortController.signal;
+    
+    if (config.abortSignal) {
+      config.abortSignal.addEventListener('abort', () => {
+        this.cancelProcessing();
+      });
+    }
+
+    this.isProcessing = true;
     const completedChunks: ChunkFeedback[] = [];
     const failedChunks: string[] = [];
     
-    console.log('🔀 Starting true blended mentor feedback processing via backend API...', {
+    console.log('🔀 Starting true blended mentor feedback processing via backend API with cancellation...', {
       mentors: mentors.map(m => m.name),
       chunkCount: chunks.length,
-      weights: mentorWeights
+      weights: mentorWeights,
+      canCancel: !!abortSignal
     });
 
     // Update character manager
     this.feedbackGenerator = new FeedbackGenerator(new CharacterMemoryManager(characters));
 
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      let success = false;
-      let retryCount = 0;
-      let lastError: any = null;
+    try {
+      for (let i = 0; i < chunks.length; i++) {
+        // NEW: Check for cancellation
+        if (abortSignal.aborted) {
+          throw new Error('Blended processing cancelled by user');
+        }
 
-      while (!success && retryCount <= config.retryAttempts) {
-        try {
-          onProgress({
-            currentChunk: i + 1,
-            totalChunks: chunks.length,
-            chunkTitle: chunk.title,
-            progress: Math.round((i / chunks.length) * 100),
-            message: retryCount > 0 
-              ? `Retrying blended analysis for ${chunk.title} (attempt ${retryCount + 1})`
-              : `Blending insights from ${mentors.length} mentors for ${chunk.title}`,
-            isRetrying: retryCount > 0,
-            retryCount,
-            completedChunks: [...completedChunks],
-            failedChunks: [...failedChunks],
-            processingType: 'blended',
-            mentorCount: mentors.length,
-            blendingMentors: mentors.map(m => m.name)
-          });
+        const chunk = chunks[i];
+        let success = false;
+        let retryCount = 0;
+        let lastError: any = null;
 
-          // Convert chunk to scene for blending
-          const chunkAsScene: ScriptScene = {
-            id: chunk.id,
-            title: chunk.title,
-            content: chunk.content,
-            characters: chunk.characters
-          };
+        while (!success && retryCount <= config.retryAttempts && !abortSignal.aborted) {
+          try {
+            onProgress({
+              currentChunk: i + 1,
+              totalChunks: chunks.length,
+              chunkTitle: chunk.title,
+              progress: Math.round((i / chunks.length) * 100),
+              message: retryCount > 0 
+                ? `Retrying blended analysis for ${chunk.title} (attempt ${retryCount + 1})`
+                : `Blending insights from ${mentors.length} mentors for ${chunk.title}`,
+              isRetrying: retryCount > 0,
+              retryCount,
+              completedChunks: [...completedChunks],
+              failedChunks: [...failedChunks],
+              processingType: 'blended',
+              mentorCount: mentors.length,
+              blendingMentors: mentors.map(m => m.name)
+            });
 
-          // Generate blended feedback using backend API via aiFeedbackService
-          const blendedFeedback = await aiFeedbackService.generateBlendedFeedback(
-            chunkAsScene,
-            mentors,
-            mentorWeights,
-            characters
-          );
+            // Convert chunk to scene for blending
+            const chunkAsScene: ScriptScene = {
+              id: chunk.id,
+              title: chunk.title,
+              content: chunk.content,
+              characters: chunk.characters
+            };
 
-          // Convert blended feedback to chunk format
-          const chunkFeedback: ChunkFeedback = {
-            chunkId: chunk.id,
-            chunkTitle: chunk.title,
-            structuredContent: blendedFeedback.feedback.structuredContent || '',
-            scratchpadContent: blendedFeedback.feedback.scratchpadContent || '',
-            mentorId: 'blended',
-            timestamp: new Date(),
-            categories: blendedFeedback.feedback.categories || {
-              structure: 'Blended analysis',
-              dialogue: 'Blended analysis',
-              pacing: 'Blended analysis',
-              theme: 'Blended analysis'
-            },
-            retryCount
-          } as ChunkFeedback & { retryCount: number };
+            // Generate blended feedback using backend API via aiFeedbackService with cancellation
+            const blendedFeedback = await aiFeedbackService.generateBlendedFeedback(
+              chunkAsScene,
+              mentors,
+              mentorWeights,
+              characters,
+              abortSignal // NEW: Pass abort signal
+            );
 
-          completedChunks.push(chunkFeedback);
-          success = true;
+            // Convert blended feedback to chunk format
+            const chunkFeedback: ChunkFeedback = {
+              chunkId: chunk.id,
+              chunkTitle: chunk.title,
+              structuredContent: blendedFeedback.feedback.structuredContent || '',
+              scratchpadContent: blendedFeedback.feedback.scratchpadContent || '',
+              mentorId: 'blended',
+              timestamp: new Date(),
+              categories: blendedFeedback.feedback.categories || {
+                structure: 'Blended analysis',
+                dialogue: 'Blended analysis',
+                pacing: 'Blended analysis',
+                theme: 'Blended analysis'
+              },
+              retryCount
+            } as ChunkFeedback & { retryCount: number };
 
-          console.log(`✅ Blended chunk processed via backend API: ${chunk.title} from ${mentors.length} mentors`);
+            completedChunks.push(chunkFeedback);
+            success = true;
 
-          // Longer delay for blended processing
-          if (i < chunks.length - 1) {
-            await this.sleep(config.baseDelay * 1.5);
+            console.log(`✅ Blended chunk processed via backend API: ${chunk.title} from ${mentors.length} mentors`);
+
+            // Longer delay for blended processing (with cancellation)
+            if (i < chunks.length - 1 && !abortSignal.aborted) {
+              await this.sleepWithCancellation(config.baseDelay * 1.5, abortSignal);
+            }
+
+          } catch (error: any) {
+            if (abortSignal.aborted || error.message?.includes('cancelled')) {
+              throw new Error('Blended processing cancelled by user');
+            }
+
+            lastError = error;
+            retryCount++;
+
+            if (retryCount <= config.retryAttempts) {
+              const retryDelay = this.calculateRetryDelay(retryCount, config);
+              await this.sleepWithCancellation(retryDelay, abortSignal);
+            }
           }
+        }
 
-        } catch (error: any) {
-          lastError = error;
-          retryCount++;
-
-          if (retryCount <= config.retryAttempts) {
-            const retryDelay = this.calculateRetryDelay(retryCount, config);
-            await this.sleep(retryDelay);
-          }
+        if (!success && !abortSignal.aborted) {
+          const fallbackFeedback = this.createBlendedFallbackFeedback(chunk, mentors, lastError, retryCount - 1);
+          completedChunks.push(fallbackFeedback);
+          failedChunks.push(chunk.id);
         }
       }
 
-      if (!success) {
-        const fallbackFeedback = this.createBlendedFallbackFeedback(chunk, mentors, lastError, retryCount - 1);
-        completedChunks.push(fallbackFeedback);
-        failedChunks.push(chunk.id);
+      if (abortSignal.aborted) {
+        throw new Error('Blended processing cancelled by user');
       }
-    }
 
-    // Generate blended summary
-    const summary = await this.generateBlendedSummary(chunks, completedChunks, mentors);
+      // Generate blended summary
+      const summary = await this.generateBlendedSummary(chunks, completedChunks, mentors);
 
-    const realSuccessfulChunks = completedChunks.filter(chunk => 
-      !(chunk as any).processingError
-    ).length;
+      const realSuccessfulChunks = completedChunks.filter(chunk => 
+        !(chunk as any).processingError
+      ).length;
 
-    onProgress({
-      currentChunk: chunks.length,
-      totalChunks: chunks.length,
-      chunkTitle: 'Complete',
-      progress: 100,
-      message: `Blended analysis complete! ${realSuccessfulChunks}/${chunks.length} sections analyzed from ${mentors.length} mentors`,
-      completedChunks,
-      failedChunks,
-      processingType: 'blended',
-      mentorCount: mentors.length,
-      blendingMentors: mentors.map(m => m.name)
-    });
-
-    return {
-      id: `blended_feedback_${Date.now()}`,
-      scriptId: chunks[0]?.id.split('_chunk_')[0] || 'unknown',
-      mentorId: 'blended',
-      chunks: completedChunks,
-      summary,
-      timestamp: new Date(),
-      processingStats: {
+      onProgress({
+        currentChunk: chunks.length,
         totalChunks: chunks.length,
-        successfulChunks: realSuccessfulChunks,
-        rateLimitedChunks: 0,
-        permanentlyFailedChunks: failedChunks.length,
-        totalRetryAttempts: completedChunks.reduce((sum, chunk) => 
-          sum + ((chunk as any).retryCount || 0), 0),
+        chunkTitle: 'Complete',
+        progress: 100,
+        message: `Blended analysis complete! ${realSuccessfulChunks}/${chunks.length} sections analyzed from ${mentors.length} mentors`,
+        completedChunks,
+        failedChunks,
         processingType: 'blended',
-        mentorCount: mentors.length
+        mentorCount: mentors.length,
+        blendingMentors: mentors.map(m => m.name)
+      });
+
+      return {
+        id: `blended_feedback_${Date.now()}`,
+        scriptId: chunks[0]?.id.split('_chunk_')[0] || 'unknown',
+        mentorId: 'blended',
+        chunks: completedChunks,
+        summary,
+        timestamp: new Date(),
+        processingStats: {
+          totalChunks: chunks.length,
+          successfulChunks: realSuccessfulChunks,
+          rateLimitedChunks: 0,
+          permanentlyFailedChunks: failedChunks.length,
+          totalRetryAttempts: completedChunks.reduce((sum, chunk) => 
+            sum + ((chunk as any).retryCount || 0), 0),
+          processingType: 'blended',
+          mentorCount: mentors.length
+        }
+      };
+
+    } catch (error: any) {
+      if (abortSignal.aborted || error.message?.includes('cancelled')) {
+        console.log('🛑 Blended processing was cancelled');
+        
+        // Return partial results if any
+        if (completedChunks.length > 0) {
+          const partialSummary = await this.generateBlendedSummary(
+            chunks.slice(0, completedChunks.length), 
+            completedChunks, 
+            mentors
+          );
+
+          return {
+            id: `cancelled_blended_feedback_${Date.now()}`,
+            scriptId: chunks[0]?.id.split('_chunk_')[0] || 'unknown',
+            mentorId: 'blended',
+            chunks: completedChunks,
+            summary: {
+              ...partialSummary,
+              overallStructure: `Blended processing cancelled after ${completedChunks.length}/${chunks.length} sections. ${partialSummary.overallStructure}`,
+              majorIssues: [
+                'Blended processing was cancelled by user',
+                `${chunks.length - completedChunks.length} sections were not processed`,
+                ...partialSummary.majorIssues
+              ]
+            },
+            timestamp: new Date(),
+            processingStats: {
+              totalChunks: chunks.length,
+              successfulChunks: completedChunks.filter(chunk => !(chunk as any).processingError).length,
+              rateLimitedChunks: 0,
+              permanentlyFailedChunks: failedChunks.length,
+              totalRetryAttempts: completedChunks.reduce((sum, chunk) => sum + ((chunk as any).retryCount || 0), 0),
+              processingType: 'blended',
+              mentorCount: mentors.length,
+              cancelled: true
+            }
+          };
+        }
+        
+        throw error;
       }
-    };
+      
+      throw error;
+    } finally {
+      this.isProcessing = false;
+      this.currentAbortController = null;
+    }
+  }
+
+  /**
+   * NEW: Cancel ongoing processing
+   */
+  cancelProcessing(): void {
+    console.log('🛑 Cancelling progressive feedback processing...');
+    
+    if (this.currentAbortController) {
+      this.currentAbortController.abort();
+    }
+    
+    // Cancel all backend API requests
+    backendApiService.cancelAllRequests();
+    
+    this.isProcessing = false;
+    
+    console.log('✅ Processing cancellation initiated');
+  }
+
+  /**
+   * NEW: Check if currently processing
+   */
+  isCurrentlyProcessing(): boolean {
+    return this.isProcessing;
+  }
+
+  /**
+   * NEW: Sleep with cancellation support
+   */
+  private async sleepWithCancellation(ms: number, abortSignal: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(resolve, ms);
+      
+      const onAbort = () => {
+        clearTimeout(timeout);
+        reject(new Error('Sleep cancelled'));
+      };
+      
+      if (abortSignal.aborted) {
+        clearTimeout(timeout);
+        reject(new Error('Sleep cancelled'));
+        return;
+      }
+      
+      abortSignal.addEventListener('abort', onAbort);
+      
+      setTimeout(() => {
+        abortSignal.removeEventListener('abort', onAbort);
+      }, ms);
+    });
   }
 
   /**
    * Process a single chunk using backend API directly
+   * ENHANCED: Now with cancellation support
    */
   private async processChunkViaBackend(
     chunk: ScriptChunk,
     mentor: Mentor,
     characters: Record<string, Character>,
-    retryCount: number = 0
+    retryCount: number = 0,
+    abortSignal: AbortSignal
   ): Promise<ChunkFeedback> {
     console.log(`🎯 Processing chunk via backend API: ${chunk.title} (attempt ${retryCount + 1})`);
 
     try {
+      // Check for cancellation
+      if (abortSignal.aborted) {
+        throw new Error('Chunk processing cancelled');
+      }
+
       // Get chunk-specific characters
       const chunkCharacters = this.getChunkCharacters(chunk, characters);
       const characterContext = CharacterDataNormalizer.createCharacterContext(chunkCharacters);
       const feedbackStyle = getMentorFeedbackStyle(mentor);
 
-      // Generate both structured and scratchpad feedback via backend API
+      // Generate both structured and scratchpad feedback via backend API with cancellation
       const [structuredContent, scratchpadContent] = await Promise.all([
         backendApiService.generateFeedback({
           scene_content: chunk.content,
@@ -388,7 +612,7 @@ export class ProgressiveFeedbackService {
           feedback_mode: 'structured',
           system_prompt: feedbackStyle.systemPrompt,
           temperature: feedbackStyle.temperature
-        }),
+        }, abortSignal), // NEW: Pass abort signal
         backendApiService.generateFeedback({
           scene_content: chunk.content,
           mentor_id: mentor.id,
@@ -396,7 +620,7 @@ export class ProgressiveFeedbackService {
           feedback_mode: 'scratchpad',
           system_prompt: feedbackStyle.systemPrompt,
           temperature: feedbackStyle.temperature
-        })
+        }, abortSignal) // NEW: Pass abort signal
       ]);
 
       return {
@@ -411,6 +635,11 @@ export class ProgressiveFeedbackService {
       } as ChunkFeedback & { retryCount: number };
 
     } catch (error: any) {
+      // NEW: Handle cancellation
+      if (abortSignal.aborted || error.message?.includes('cancelled')) {
+        throw new Error('Chunk processing cancelled');
+      }
+
       // Enhanced error detection and re-throw for retry logic
       if (this.isRateLimitError(error)) {
         console.log(`🚨 Rate limit detected for ${chunk.title}:`, error.message);
@@ -425,16 +654,23 @@ export class ProgressiveFeedbackService {
 
   /**
    * Process single scene chunk via backend API
+   * ENHANCED: Now with cancellation support
    */
   private async processSingleSceneChunkViaBackend(
     chunk: ScriptChunk,
     mentor: Mentor,
     characters: Record<string, Character>,
-    retryCount: number = 0
+    retryCount: number = 0,
+    abortSignal: AbortSignal
   ): Promise<ChunkFeedback> {
     console.log(`🎭 Processing single scene via backend API: ${chunk.title} with ${mentor.name} (attempt ${retryCount + 1})`);
 
     try {
+      // Check for cancellation
+      if (abortSignal.aborted) {
+        throw new Error('Single scene processing cancelled');
+      }
+
       // Use aiFeedbackService which now uses backend API
       const sceneAsScene: ScriptScene = {
         id: chunk.id,
@@ -446,7 +682,8 @@ export class ProgressiveFeedbackService {
       const dualFeedback = await aiFeedbackService.generateDualFeedback({
         scene: sceneAsScene,
         mentor,
-        characters
+        characters,
+        abortSignal // NEW: Pass abort signal
       });
 
       return {
@@ -466,6 +703,11 @@ export class ProgressiveFeedbackService {
       } as ChunkFeedback & { retryCount: number };
 
     } catch (error: any) {
+      // NEW: Handle cancellation
+      if (abortSignal.aborted || error.message?.includes('cancelled')) {
+        throw new Error('Single scene processing cancelled');
+      }
+
       if (this.isRateLimitError(error)) {
         throw new Error(`RATE_LIMIT: ${error.message}`);
       } else {
@@ -476,16 +718,23 @@ export class ProgressiveFeedbackService {
 
   /**
    * Process blended chunk via backend API
+   * ENHANCED: Now with cancellation support
    */
   private async processBlendedChunkViaBackend(
     chunk: ScriptChunk,
     blendedMentor: Mentor,
     characters: Record<string, Character>,
-    retryCount: number = 0
+    retryCount: number = 0,
+    abortSignal: AbortSignal
   ): Promise<ChunkFeedback> {
     console.log(`🔀 Processing blended chunk via backend API: ${chunk.title} (attempt ${retryCount + 1})`);
 
     try {
+      // Check for cancellation
+      if (abortSignal.aborted) {
+        throw new Error('Blended processing cancelled');
+      }
+
       // Use aiFeedbackService which now supports blended feedback via backend API
       const sceneAsScene: ScriptScene = {
         id: chunk.id,
@@ -497,7 +746,8 @@ export class ProgressiveFeedbackService {
       const dualFeedback = await aiFeedbackService.generateDualFeedback({
         scene: sceneAsScene,
         mentor: blendedMentor,
-        characters
+        characters,
+        abortSignal // NEW: Pass abort signal
       });
 
       return {
@@ -517,6 +767,11 @@ export class ProgressiveFeedbackService {
       } as ChunkFeedback & { retryCount: number };
 
     } catch (error: any) {
+      // NEW: Handle cancellation
+      if (abortSignal.aborted || error.message?.includes('cancelled')) {
+        throw new Error('Blended processing cancelled');
+      }
+
       if (this.isRateLimitError(error)) {
         throw new Error(`RATE_LIMIT: ${error.message}`);
       } else {
