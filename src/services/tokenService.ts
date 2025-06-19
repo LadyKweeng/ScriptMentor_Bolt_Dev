@@ -13,6 +13,39 @@ import {
   isValidTransactionType
 } from '../types/tokens';
 
+// Add this code to the TOP of src/services/tokenService.ts (after imports)
+
+// Development mode detection
+const isDevelopment = () => {
+  return (
+    import.meta.env.DEV || 
+    import.meta.env.MODE === 'development' ||
+    import.meta.env.VITE_DEV_MODE === 'true'
+  );
+};
+
+const isUnlimitedTokensEnabled = () => {
+  return import.meta.env.VITE_UNLIMITED_TOKENS === 'true';
+};
+
+const isTestUser = (userId: string) => {
+  const testUserIds = [
+    'demo-user-12345',
+    import.meta.env.VITE_TEST_USER_ID,
+    'test-user-dev'
+  ].filter(Boolean);
+  
+  return testUserIds.includes(userId);
+};
+
+const shouldBypassTokens = (userId: string) => {
+  const bypass = isDevelopment() && (isUnlimitedTokensEnabled() || isTestUser(userId));
+  if (bypass) {
+    console.log('🚀 Development mode: Bypassing tokens for user:', userId);
+  }
+  return bypass;
+};
+
 export class TokenService {
   /**
    * Get user's current token balance and account info
@@ -40,6 +73,8 @@ export class TokenService {
       throw new Error('Failed to fetch token balance');
     }
   }
+
+
 
   /**
    * Initialize new user with free tier tokens
@@ -71,6 +106,15 @@ export class TokenService {
    * Validate if user has enough tokens for an action
    */
   async validateTokenBalance(userId: string, requiredTokens: number): Promise<TokenValidationResult> {
+    // Development bypass
+  if (shouldBypassTokens(userId)) {
+    return {
+      hasEnoughTokens: true,
+      currentBalance: 999999, // Mock unlimited balance
+      requiredTokens,
+      tier: 'pro' // Grant pro tier access
+    };
+  }
     try {
       const userTokens = await this.getUserTokenBalance(userId);
       
@@ -99,6 +143,10 @@ export class TokenService {
    */
   async deductTokens(request: TokenDeductionRequest): Promise<boolean> {
     const { userId, tokensToDeduct, actionType, scriptId, mentorId, sceneId } = request;
+    if (shouldBypassTokens(userId)) {
+    console.log(`🚀 Development bypass: Skipping deduction of ${tokensToDeduct} tokens for ${actionType}`);
+    return true;
+  }
 
     try {
       // Validate action type
@@ -324,6 +372,18 @@ export class TokenService {
     mentorId?: string,
     sceneId?: string
   ): Promise<{ success: boolean; validation: TokenValidationResult }> {
+    if (shouldBypassTokens(userId)) {
+    console.log(`🚀 Development bypass: Skipping token transaction for ${actionType}`);
+    return {
+      success: true,
+      validation: {
+        hasEnoughTokens: true,
+        currentBalance: 999999,
+        requiredTokens: this.getTokenCost(actionType),
+        tier: 'pro'
+      }
+    };
+  }
     try {
       const { canProceed, validation, cost } = await this.validateAndPrepareDeduction(
         userId, actionType, scriptId, mentorId, sceneId

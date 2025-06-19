@@ -222,60 +222,76 @@ const App: React.FC = () => {
 
   // PRESERVED: ENHANCED CANCEL FUNCTION - Properly stops backend processing
   const handleCancelProcessing = async () => {
-    console.log('🛑 User initiated cancel - stopping all processing...');
+  console.log('🛑 User initiated cancel - stopping all processing...');
 
-    try {
-      // 1. Cancel the progressive feedback service
-      if (progressiveFeedbackService.isCurrentlyProcessing()) {
-        console.log('🛑 Cancelling progressive feedback service...');
-        progressiveFeedbackService.cancelProcessing();
-      }
-
-      // 2. Abort current abort controller if exists
-      if (currentAbortController) {
-        console.log('🛑 Aborting current controller...');
-        currentAbortController.abort();
-        setCurrentAbortController(null);
-      }
-
-      // 3. Cancel all backend API requests
-      const activeRequestCount = backendApiService.getActiveRequestCount();
-      if (activeRequestCount > 0) {
-        console.log(`🛑 Cancelling ${activeRequestCount} active backend requests...`);
-        backendApiService.cancelAllRequests();
-      }
-
-      // 4. Reset all UI state to pre-processing state
-      setShowProgressiveProgress(false);
-      setIsGeneratingFeedback(false);
-      setProgressiveProgress(null);
-      setPartialFeedback(null);
-
-      // 5. Reset writer suggestions state
-      setIsGeneratingWriterSuggestions(false);
-      setWriterSuggestionsStarted(false);
-      setWriterSuggestionsReady(false);
-      setShowWriterSuggestions(false);
-
-      // 6. Clear any partial feedback that might have been generated
-      // Note: Keep existing full feedback if it was already complete
-      if (partialFeedback && !feedback) {
-        setPartialFeedback(null);
-      }
-
-      console.log('✅ Processing cancellation completed successfully');
-
-    } catch (error) {
-      console.error('❌ Error during cancellation:', error);
-
-      // Even if there's an error, reset the UI state
-      setShowProgressiveProgress(false);
-      setIsGeneratingFeedback(false);
-      setProgressiveProgress(null);
-      setPartialFeedback(null);
-      setCurrentAbortController(null);
+  try {
+    // 1. Cancel the progressive feedback service
+    if (progressiveFeedbackService.isCurrentlyProcessing()) {
+      console.log('🛑 Cancelling progressive feedback service...');
+      progressiveFeedbackService.cancelProcessing();
     }
-  };
+
+    // 2. Abort current abort controller if exists
+    if (currentAbortController) {
+      console.log('🛑 Aborting current controller...');
+      currentAbortController.abort();
+      
+      // ✅ FIX: Wait briefly for abort signal to propagate
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+
+    // 3. Cancel all backend API requests with confirmation
+    const activeRequestCount = backendApiService.getActiveRequestCount();
+    if (activeRequestCount > 0) {
+      console.log(`🛑 Cancelling ${activeRequestCount} active backend requests...`);
+      backendApiService.cancelAllRequests();
+      
+      // ✅ FIX: Wait for requests to actually cancel
+      let attempts = 0;
+      while (backendApiService.getActiveRequestCount() > 0 && attempts < 10) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        attempts++;
+      }
+      
+      if (backendApiService.getActiveRequestCount() > 0) {
+        console.warn('⚠️ Some backend requests may still be active after cancellation');
+      } else {
+        console.log('✅ All backend requests successfully cancelled');
+      }
+    }
+
+    // 4. Reset all UI state AFTER confirming backend cancellation
+    setShowProgressiveProgress(false);
+    setIsGeneratingFeedback(false);
+    setProgressiveProgress(null);
+    setPartialFeedback(null);
+    setCurrentAbortController(null);
+
+    // 5. Reset writer suggestions state
+    setIsGeneratingWriterSuggestions(false);
+    setWriterSuggestionsStarted(false);
+    setWriterSuggestionsReady(false);
+    setShowWriterSuggestions(false);
+
+    // 6. Clear any partial feedback that might have been generated
+    // Note: Keep existing full feedback if it was already complete
+    if (partialFeedback && !feedback) {
+      setPartialFeedback(null);
+    }
+
+    console.log('✅ Processing cancellation completed successfully');
+
+  } catch (error) {
+    console.error('❌ Error during cancellation:', error);
+
+    // ✅ FIX: Even if there's an error, force reset the UI state
+    setShowProgressiveProgress(false);
+    setIsGeneratingFeedback(false);
+    setProgressiveProgress(null);
+    setPartialFeedback(null);
+    setCurrentAbortController(null);
+  }
+};
 
   if (!session) {
     return <Auth onAuthChange={setSession} />;
@@ -477,9 +493,12 @@ const App: React.FC = () => {
           scriptId: script.id,
           onProgress: (progress) => {
             setProgressiveProgress(progress);
-            
+
+            // FIXED: Added defensive null checks for completedChunks
+            const completedChunks = progress.completedChunks || [];
+
             // Show partial results as chunks complete
-            if (progress.completedChunks.length > 0 && !partialFeedback) {
+            if (completedChunks.length > 0 && !partialFeedback) {
               const partialResult = {
                 id: `partial-feedback-${Date.now()}`,
                 mentorId: mentor.id,
@@ -503,39 +522,44 @@ const App: React.FC = () => {
           abortSignal: abortController.signal
         });
 
-        if (result.success) {
-          const finalFeedback = {
-            id: result.feedback.id,
-            mentorId: mentor.id,
-            sceneId: script.id,
-            timestamp: result.feedback.timestamp,
-            isChunked: true,
-            chunks: result.feedback.chunks,
-            summary: result.feedback.summary,
-            processingStats: (result.feedback as any).processingStats
-          } as any;
-          
-          setFeedback(finalFeedback);
-          setPartialFeedback(null);
-          setRewrite(null);
-          setDiffLines([]);
-          refreshTokenDisplay();
-          
-          console.log('✅ Token-aware progressive chunked feedback complete');
-          
-          // Start writer suggestions in background (with cancellation support)
-          if (!abortController.signal.aborted && selectedChunkId) {
-            const selectedChunk = script.chunks.find(c => c.id === selectedChunkId);
-            const chunkFeedback = result.feedback.chunks.find(cf => cf.chunkId === selectedChunkId);
-            
-            if (selectedChunk && chunkFeedback && !(chunkFeedback as any).processingError) {
-              setIsGeneratingWriterSuggestions(true);
-              setWriterSuggestionsStarted(true);
-              generateWriterSuggestionsInBackground(selectedChunk, finalFeedback, abortController);
+        // ✅ Check if operation was cancelled before setting results
+        if (!abortController.signal.aborted) {
+          if (result.success) {
+            const finalFeedback = {
+              id: result.feedback.id,
+              mentorId: mentor.id,
+              sceneId: script.id,
+              timestamp: result.feedback.timestamp,
+              isChunked: true,
+              chunks: result.feedback.chunks,
+              summary: result.feedback.summary,
+              processingStats: (result.feedback as any).processingStats
+            } as any;
+
+            setFeedback(finalFeedback);
+            setPartialFeedback(null);
+            setRewrite(null);
+            setDiffLines([]);
+            refreshTokenDisplay();
+
+            console.log('✅ Token-aware progressive chunked feedback complete');
+
+            // Start writer suggestions in background (with cancellation support)
+            if (selectedChunkId) {
+              const selectedChunk = script.chunks.find(c => c.id === selectedChunkId);
+              const chunkFeedback = result.feedback.chunks.find(cf => cf.chunkId === selectedChunkId);
+
+              if (selectedChunk && chunkFeedback && !(chunkFeedback as any).processingError) {
+                setIsGeneratingWriterSuggestions(true);
+                setWriterSuggestionsStarted(true);
+                generateWriterSuggestionsInBackground(selectedChunk, finalFeedback, abortController);
+              }
             }
+          } else {
+            handleTokenError(result.error || 'Chunked feedback generation failed', 'chunked_feedback');
           }
         } else {
-          handleTokenError(result.error || 'Chunked feedback generation failed', 'chunked_feedback');
+          console.log('🛑 Chunked feedback was cancelled - not setting results');
         }
       } else {
         // PRESERVED: Fallback to original progressive processing without token integration
@@ -545,9 +569,12 @@ const App: React.FC = () => {
           characters,
           (progress) => {
             setProgressiveProgress(progress);
-            
+
+            // FIXED: Added defensive null checks for completedChunks
+            const completedChunks = progress.completedChunks || [];
+
             // Show partial results as chunks complete
-            if (progress.completedChunks.length > 0 && !partialFeedback) {
+            if (completedChunks.length > 0 && !partialFeedback) {
               const partialResult = {
                 id: `partial-feedback-${Date.now()}`,
                 mentorId: mentor.id,
@@ -644,38 +671,99 @@ const App: React.FC = () => {
       });
 
       // NEW: Token validation and processing if user is authenticated
-      if (session?.user) {
-        // Use token-aware service
-        const result = await aiFeedbackService.generateDualFeedback({
-          userId: session.user.id,
-          scene: scene,
-          mentor: mentor,
-          characters: characters,
-          actionType: 'single_feedback',
-          scriptId: scene.id,
-          mentorId: mentor.id,
-          sceneId: scene.id,
-          abortSignal: abortController.signal
-        });
+      // ✅ ALWAYS show initial progress regardless of path
+setProgressiveProgress({
+  currentChunk: 1,
+  totalChunks: 1,
+  chunkTitle: scene.title,
+  progress: 10,
+  message: `Starting ${mentor.name} analysis for scene...`,
+  isRetrying: false,
+  retryCount: 0,
+  completedChunks: [],
+  failedChunks: [],
+  processingType: 'single'
+});
 
-        if (result.success) {
-          setFeedback(result.feedback);
-          setPartialFeedback(null);
-          setRewrite(null);
-          setDiffLines([]);
-          refreshTokenDisplay();
-          
-          console.log('✅ Token-aware progressive single scene feedback complete');
-          
-          // Start writer suggestions in background (with cancellation support)
-          if (!abortController.signal.aborted) {
-            setIsGeneratingWriterSuggestions(true);
-            setWriterSuggestionsStarted(true);
-            generateWriterSuggestionsInBackground(scene, result.feedback, abortController);
-          }
-        } else {
-          handleTokenError(result.error || 'Single scene feedback generation failed', 'single_feedback');
+// Token validation and processing if user is authenticated
+if (session?.user) {
+  console.log('🔒 Using token-aware processing with progressive UI...');
+  
+  // ✅ Show progress during token validation
+  setProgressiveProgress(prev => prev ? {
+    ...prev,
+    progress: 25,
+    message: `Validating tokens for ${mentor.name} analysis...`
+  } : null);
+
+  // Use token-aware service
+  const result = await aiFeedbackService.generateDualFeedback({
+    userId: session.user.id,
+    scene: scene,
+    mentor: mentor,
+    characters: characters,
+    actionType: 'single_feedback',
+    scriptId: scene.id,
+    mentorId: mentor.id,
+    sceneId: scene.id,
+    abortSignal: abortController.signal
+  });
+
+  // ✅ Show progress during processing
+  setProgressiveProgress(prev => prev ? {
+    ...prev,
+    progress: 75,
+    message: `Processing ${mentor.name} feedback via backend API...`
+  } : null);
+
+  // ✅ Simulate brief processing time to show completion
+  await new Promise(resolve => setTimeout(resolve, 500));
+
+  if (result.success) {
+    // ✅ Show completion progress
+    setProgressiveProgress(prev => prev ? {
+      ...prev,
+      progress: 100,
+      message: `${mentor.name} analysis complete!`,
+      completedChunks: [{
+        chunkId: scene.id,
+        chunkTitle: scene.title,
+        structuredContent: result.feedback.structuredContent || '',
+        scratchpadContent: result.feedback.scratchpadContent || '',
+        mentorId: mentor.id,
+        timestamp: new Date(),
+        categories: result.feedback.categories || {
+          structure: 'Analyzed',
+          dialogue: 'Analyzed', 
+          pacing: 'Analyzed',
+          theme: 'Analyzed'
         }
+      }]
+    } : null);
+
+    // Brief delay to show completion state
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    // ✅ Check if operation was cancelled before setting results
+    if (!abortController.signal.aborted) {
+      setFeedback(result.feedback);
+      setPartialFeedback(null);
+      setRewrite(null);
+      setDiffLines([]);
+      refreshTokenDisplay();
+
+      console.log('✅ Token-aware progressive single scene feedback complete');
+
+      // Start writer suggestions in background
+      setIsGeneratingWriterSuggestions(true);
+      setWriterSuggestionsStarted(true);
+      generateWriterSuggestionsInBackground(scene, result.feedback, abortController);
+    } else {
+      console.log('🛑 Single scene feedback was cancelled - not setting results');
+    }
+  } else {
+    handleTokenError(result.error || 'Single scene feedback generation failed', 'single_feedback');
+  }
       } else {
         // PRESERVED: Fallback to original progressive processing without token integration
         // Convert single scene to chunk format for progressive processing
@@ -947,22 +1035,54 @@ const App: React.FC = () => {
     );
 
     if (selectedMentorsList.length > 0) {
-      setIsGeneratingFeedback(true);
-      setShowProgressiveProgress(true);
-      setPartialFeedback(null);
-      setTokenError(null);
+  setIsGeneratingFeedback(true);
+  setShowProgressiveProgress(true);
+  setPartialFeedback(null);
+  setTokenError(null);
+
       
+      // ✅ FIX: Create NEW abort controller for consistent reference throughout
+      const activeAbortController = new AbortController();
+      setCurrentAbortController(activeAbortController);
+      const abortSignal = activeAbortController.signal;
+
+      // ✅ FIX: Add abortion listener to cleanup state if external cancellation occurs
+      abortSignal.addEventListener('abort', () => {
+        console.log('🛑 Blended feedback aborted via signal');
+        setIsGeneratingFeedback(false);
+        setShowProgressiveProgress(false);
+        setProgressiveProgress(null);
+        setPartialFeedback(null);
+      });
+
       try {
-        console.log('🔀 Starting token-aware progressive blended feedback...', {
+        console.log('🔀 Starting progressive blended feedback with unified UI...', {
           mentors: selectedMentorsList.map(m => m.name),
           targetType: currentScript ? 'chunked' : 'single',
-          userId: session?.user?.id
+          userId: session?.user?.id,
+          hasSession: !!session?.user
+        });
+
+        // ✅ ALWAYS show initial progress regardless of path
+        setProgressiveProgress({
+          currentChunk: 1,
+          totalChunks: 1,
+          chunkTitle: targetScene.title,
+          progress: 10,
+          message: `Starting blended analysis from ${selectedMentorsList.length} mentors...`,
+          isRetrying: false,
+          retryCount: 0,
+          completedChunks: [],
+          failedChunks: [],
+          processingType: 'blended',
+          mentorCount: selectedMentorsList.length,
+          blendingMentors: selectedMentorsList.map(m => m.name)
         });
 
         // Create blended mentor object for progressive processing
-        const blendedMentor = { 
-          id: 'blended', 
-          name: 'Blended Mentors', 
+        const blendedMentor = {
+          id: 'blended',
+          name: 'Blended Mentors',
           tone: 'Multi-perspective approach',
           styleNotes: `Combined insights from: ${selectedMentorsList.map(m => m.name).join(', ')}`,
           avatar: 'https://images.pexels.com/photos/7102/notes-macbook-study-conference.jpg?auto=compress&cs=tinysrgb&w=600',
@@ -984,6 +1104,12 @@ const App: React.FC = () => {
               actionType: 'blended_feedback',
               scriptId: currentScript.id,
               onProgress: (progress) => {
+                // ✅ FIX: Check abort signal in progress callback FIRST
+                if (abortSignal.aborted) {
+                  console.log('🛑 Progress callback detected cancellation - skipping UI update');
+                  return;
+                }
+
                 setProgressiveProgress({
                   ...progress,
                   message: `Blending ${selectedMentorsList.length} mentors for ${progress.chunkTitle}`,
@@ -991,61 +1117,71 @@ const App: React.FC = () => {
                   mentorCount: selectedMentorsList.length,
                   blendingMentors: selectedMentorsList.map(m => m.name)
                 });
-                
+
+                // FIXED: Added defensive null checks for completedChunks
+                const completedChunks = progress.completedChunks || [];
+
                 // Show partial blended results
-                if (progress.completedChunks.length > 0 && !partialFeedback) {
+                if (completedChunks.length > 0 && !partialFeedback) {
                   const partialResult = {
                     id: `partial-blended-feedback-${Date.now()}`,
                     mentorId: 'blended',
                     sceneId: currentScript.id,
                     timestamp: new Date(),
                     isChunked: true,
-                    chunks: progress.completedChunks,
+                    chunks: completedChunks,
                     summary: {
                       overallStructure: `Blending ${selectedMentorsList.length} mentors: ${progress.currentChunk}/${progress.totalChunks} sections...`,
                       keyStrengths: ['Multi-perspective analysis in progress'],
-                      majorIssues: progress.failedChunks.length > 0 ? 
-                        [`${progress.failedChunks.length} sections need additional blending`] : [],
+                      majorIssues: (progress.failedChunks || []).length > 0 ?
+                        [`${(progress.failedChunks || []).length} sections need additional blending`] : [],
                       globalRecommendations: ['Blended mentor analysis in progress']
                     }
                   } as any;
-                  
+
                   setPartialFeedback(partialResult);
                 }
               },
-              abortSignal: currentAbortController?.signal
+              abortSignal: abortSignal
             });
 
-            if (result.success) {
-              const blendedFeedback = {
-                id: result.feedback.id,
-                mentorId: 'blended',
-                sceneId: currentScript.id,
-                timestamp: result.feedback.timestamp,
-                isChunked: true,
-                chunks: result.feedback.chunks,
-                summary: {
-                  ...result.feedback.summary,
-                  overallStructure: `Blended analysis from ${selectedMentorsList.length} mentors: ${result.feedback.summary.overallStructure}`
-                }
-              } as any;
 
-              setFeedback(blendedFeedback);
-              refreshTokenDisplay();
-              
-              // Enable writer suggestions for blended chunked feedback
-              if (selectedChunkId) {
-                const selectedChunk = currentScript.chunks.find(c => c.id === selectedChunkId);
-                const chunkFeedback = result.feedback.chunks.find(cf => cf.chunkId === selectedChunkId);
-                
-                if (selectedChunk && chunkFeedback && !(chunkFeedback as any).processingError) {
-                  setIsGeneratingWriterSuggestions(true);
-                  setWriterSuggestionsStarted(true);
-                  generateWriterSuggestionsInBackground(selectedChunk, blendedFeedback, currentAbortController!);
+            // ✅ FIX: ALWAYS check abort signal before setting results
+            if (!abortSignal.aborted) {
+              if (result.success) {
+                const blendedFeedback = {
+                  id: result.feedback.id,
+                  mentorId: 'blended',
+                  sceneId: currentScript.id,
+                  timestamp: result.feedback.timestamp,
+                  isChunked: true,
+                  chunks: result.feedback.chunks,
+                  summary: {
+                    ...result.feedback.summary,
+                    overallStructure: `Blended analysis from ${selectedMentorsList.length} mentors: ${result.feedback.summary.overallStructure}`
+                  }
+                } as any;
+
+                setFeedback(blendedFeedback);
+                refreshTokenDisplay();
+
+                // Enable writer suggestions for blended chunked feedback
+                if (selectedChunkId) {
+                  const selectedChunk = currentScript.chunks.find(c => c.id === selectedChunkId);
+                  const chunkFeedback = result.feedback.chunks.find(cf => cf.chunkId === selectedChunkId);
+
+                  if (selectedChunk && chunkFeedback && !(chunkFeedback as any).processingError) {
+                    setIsGeneratingWriterSuggestions(true);
+                    setWriterSuggestionsStarted(true);
+                    generateWriterSuggestionsInBackground(selectedChunk, blendedFeedback, activeAbortController);
+                  }
                 }
+              } else {
+                handleTokenError(result.error || 'Blended chunked feedback failed', 'blended_feedback');
               }
             } else {
-              handleTokenError(result.error || 'Blended chunked feedback failed', 'blended_feedback');
+              console.log('🛑 Blended chunked feedback was cancelled - not setting results');
+              return; // ✅ FIX: Early return on cancellation
             }
           } else {
             // PRESERVED: Fallback to original progressive processing without tokens
@@ -1054,6 +1190,12 @@ const App: React.FC = () => {
               blendedMentor,
               characters,
               (progress) => {
+                // ✅ FIX: Check abort signal in fallback progress callback too
+                if (abortSignal.aborted) {
+                  console.log('🛑 Fallback progress callback detected cancellation');
+                  return;
+                }
+                
                 setProgressiveProgress({
                   ...progress,
                   message: `Blending ${selectedMentorsList.length} mentors for ${progress.chunkTitle}`,
@@ -1061,25 +1203,28 @@ const App: React.FC = () => {
                   mentorCount: selectedMentorsList.length,
                   blendingMentors: selectedMentorsList.map(m => m.name)
                 });
-                
+
+                // FIXED: Added defensive null checks for completedChunks
+                const completedChunks = progress.completedChunks || [];
+
                 // Show partial blended results
-                if (progress.completedChunks.length > 0 && !partialFeedback) {
+                if (completedChunks.length > 0 && !partialFeedback) {
                   const partialResult = {
                     id: `partial-blended-feedback-${Date.now()}`,
                     mentorId: 'blended',
                     sceneId: currentScript.id,
                     timestamp: new Date(),
                     isChunked: true,
-                    chunks: progress.completedChunks,
+                    chunks: completedChunks,
                     summary: {
                       overallStructure: `Blending ${selectedMentorsList.length} mentors: ${progress.currentChunk}/${progress.totalChunks} sections...`,
                       keyStrengths: ['Multi-perspective analysis in progress'],
-                      majorIssues: progress.failedChunks.length > 0 ? 
-                        [`${progress.failedChunks.length} sections need additional blending`] : [],
+                      majorIssues: (progress.failedChunks || []).length > 0 ?
+                        [`${(progress.failedChunks || []).length} sections need additional blending`] : [],
                       globalRecommendations: ['Blended mentor analysis in progress']
                     }
                   } as any;
-                  
+
                   setPartialFeedback(partialResult);
                 }
               },
@@ -1089,24 +1234,31 @@ const App: React.FC = () => {
                 baseDelay: 4000, // Longer delay for blended processing
                 exponentialBackoff: true,
                 showPartialResults: true,
-                processingType: 'blended'
+                processingType: 'blended',
+                abortSignal: abortSignal
               }
             );
 
-            const blendedFeedback = {
-              id: newFeedback.id,
-              mentorId: 'blended',
-              sceneId: currentScript.id,
-              timestamp: newFeedback.timestamp,
-              isChunked: true,
-              chunks: newFeedback.chunks,
-              summary: {
-                ...newFeedback.summary,
-                overallStructure: `Blended analysis from ${selectedMentorsList.length} mentors across ${currentScript.chunks.length} sections: ${newFeedback.summary.overallStructure}`
-              }
-            } as any;
+            // ✅ FIX: Check cancellation in fallback path
+            if (!abortSignal.aborted) {
+              const blendedFeedback = {
+                id: newFeedback.id,
+                mentorId: 'blended',
+                sceneId: currentScript.id,
+                timestamp: newFeedback.timestamp,
+                isChunked: true,
+                chunks: newFeedback.chunks,
+                summary: {
+                  ...newFeedback.summary,
+                  overallStructure: `Blended analysis from ${selectedMentorsList.length} mentors across ${currentScript.chunks.length} sections: ${newFeedback.summary.overallStructure}`
+                }
+              } as any;
 
-            setFeedback(blendedFeedback);
+              setFeedback(blendedFeedback);
+            } else {
+              console.log('🛑 Blended chunked fallback feedback was cancelled');
+              return; // ✅ FIX: Early return on cancellation
+            }
             
             // Enable writer suggestions for blended chunked feedback
             if (selectedChunkId) {
@@ -1132,6 +1284,20 @@ const App: React.FC = () => {
           
           // NEW: Token-aware blended single scene feedback if user is authenticated
           if (session?.user) {
+            // ✅ FIX: Check cancellation before showing progress
+            if (abortSignal.aborted) {
+              console.log('🛑 Single scene blended feedback cancelled before token validation');
+              return;
+            }
+            
+            // ✅ Show progress during token validation
+            setProgressiveProgress(prev => prev ? {
+              ...prev,
+              progress: 25,
+              message: `Validating tokens for blended ${selectedMentorsList.length} mentor analysis...`
+            } : null);
+
+            // Token-aware single scene blended processing
             const result = await aiFeedbackService.generateBlendedFeedback({
               userId: session.user.id,
               scene: sceneForBlending,
@@ -1141,17 +1307,57 @@ const App: React.FC = () => {
               actionType: 'blended_feedback',
               scriptId: sceneForBlending.id,
               sceneId: sceneForBlending.id,
-              abortSignal: currentAbortController?.signal
+              abortSignal: abortSignal
             });
 
+            // ✅ Show progress during processing
+            setProgressiveProgress(prev => prev ? {
+              ...prev,
+              progress: 75,
+              message: `Blending ${selectedMentorsList.length} mentor perspectives via backend API...`
+            } : null);
+
+            // ✅ Brief processing simulation to show progress
+            await new Promise(resolve => setTimeout(resolve, 800));
+
             if (result.success) {
-              setFeedback(result.feedback);
-              refreshTokenDisplay();
-              
-              // Enable writer suggestions for blended single scene feedback
-              setIsGeneratingWriterSuggestions(true);
-              setWriterSuggestionsStarted(true);
-              generateWriterSuggestionsInBackground(sceneForBlending, result.feedback, currentAbortController!);
+              // ✅ Show completion progress
+              setProgressiveProgress(prev => prev ? {
+                ...prev,
+                progress: 100,
+                message: `Blended analysis from ${selectedMentorsList.length} mentors complete!`,
+                completedChunks: [{
+                  chunkId: sceneForBlending.id,
+                  chunkTitle: sceneForBlending.title,
+                  structuredContent: result.feedback.structuredContent || '',
+                  scratchpadContent: result.feedback.scratchpadContent || '',
+                  mentorId: 'blended',
+                  timestamp: new Date(),
+                  categories: result.feedback.categories || {
+                    structure: 'Blended analysis',
+                    dialogue: 'Blended analysis',
+                    pacing: 'Blended analysis',
+                    theme: 'Blended analysis'
+                  }
+                }]
+              } : null);
+
+              // Brief delay to show completion
+              await new Promise(resolve => setTimeout(resolve, 1000));
+
+              // ✅ FIX: Check if operation was cancelled before setting results
+              if (!abortSignal.aborted) {
+                setFeedback(result.feedback);
+                refreshTokenDisplay();
+
+                // Enable writer suggestions for blended single scene feedback
+                setIsGeneratingWriterSuggestions(true);
+                setWriterSuggestionsStarted(true);
+                generateWriterSuggestionsInBackground(sceneForBlending, result.feedback, activeAbortController);
+              } else {
+                console.log('🛑 Blended single scene feedback was cancelled - not setting results');
+                return; // ✅ FIX: Early return on cancellation
+              }
             } else {
               handleTokenError(result.error || 'Blended single scene feedback failed', 'blended_feedback');
             }
@@ -1212,25 +1418,31 @@ const App: React.FC = () => {
               }
             );
             
-            // Convert back to single scene feedback format
-            const chunkFeedback = newFeedback.chunks[0];
-            const blendedFeedback = {
-              id: newFeedback.id,
-              mentorId: 'blended',
-              sceneId: sceneForBlending.id,
-              timestamp: newFeedback.timestamp,
-              isChunked: false,
-              structuredContent: chunkFeedback?.structuredContent || '',
-              scratchpadContent: chunkFeedback?.scratchpadContent || '',
-              categories: chunkFeedback?.categories || {
-                structure: 'Blended analysis',
-                dialogue: 'Blended analysis',
-                pacing: 'Blended analysis',
-                theme: 'Blended analysis'
-              }
-            } as Feedback;
-            
-            setFeedback(blendedFeedback);
+            // ✅ FIX: Check for cancellation before setting feedback
+            if (!abortSignal.aborted) {
+              // Convert back to single scene feedback format
+              const chunkFeedback = newFeedback.chunks[0];
+              const blendedFeedback = {
+                id: newFeedback.id,
+                mentorId: 'blended',
+                sceneId: sceneForBlending.id,
+                timestamp: newFeedback.timestamp,
+                isChunked: false,
+                structuredContent: chunkFeedback?.structuredContent || '',
+                scratchpadContent: chunkFeedback?.scratchpadContent || '',
+                categories: chunkFeedback?.categories || {
+                  structure: 'Blended analysis',
+                  dialogue: 'Blended analysis',
+                  pacing: 'Blended analysis',
+                  theme: 'Blended analysis'
+                }
+              } as Feedback;
+
+              setFeedback(blendedFeedback);
+            } else {
+              console.log('🛑 Blended single scene fallback feedback was cancelled');
+              return; // ✅ FIX: Early return on cancellation
+            }
             
             // Enable writer suggestions for blended single scene feedback
             setIsGeneratingWriterSuggestions(true);
@@ -1249,19 +1461,30 @@ const App: React.FC = () => {
         console.log('✅ Token-aware progressive blended feedback complete');
         
       } catch (error: any) {
-        console.error('❌ Progressive blended feedback failed:', error);
-        if (error.message?.includes('Insufficient tokens')) {
-          handleTokenError(error.message, 'blended_feedback');
+        // ✅ FIX: Better error handling for cancellation
+        if (abortSignal.aborted || error.message?.includes('cancelled')) {
+          console.log('✅ Blended feedback generation was properly cancelled');
+          // Don't set error state for intentional cancellation
+          return;
+        } else {
+          console.error('❌ Progressive blended feedback failed:', error);
+          if (error.message?.includes('Insufficient tokens')) {
+            handleTokenError(error.message, 'blended_feedback');
+          }
+          setFeedback(null);
+          setPartialFeedback(null);
+          setWriterSuggestionsReady(false);
+          setShowWriterSuggestions(false);
+          setWriterSuggestionsStarted(false);
         }
-        setFeedback(null);
-        setPartialFeedback(null);
-        setWriterSuggestionsReady(false);
-        setShowWriterSuggestions(false);
-        setWriterSuggestionsStarted(false);
       } finally {
-        setIsGeneratingFeedback(false);
-        setShowProgressiveProgress(false);
-        setProgressiveProgress(null);
+        // ✅ FIX: Only cleanup if not cancelled (cancelled cleanup handled by handleCancelProcessing)
+        if (!abortSignal.aborted) {
+          setIsGeneratingFeedback(false);
+          setShowProgressiveProgress(false);
+          setProgressiveProgress(null);
+          setCurrentAbortController(null);
+        }
       }
     }
   };

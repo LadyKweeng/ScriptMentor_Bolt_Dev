@@ -1,17 +1,26 @@
-// src/services/feedbackChunkService.ts - Complete enhanced version with token integration + ALL original features
+// src/services/feedbackChunkService.ts - FIXED: Updated progress interface to match progressiveFeedbackService
 import { ScriptChunk, ChunkFeedback, ChunkedScriptFeedback, Mentor, Character, TokenAwareRequest, TokenAwareResponse } from '../types';
 import { aiFeedbackService } from './aiFeedbackService';
 import { tokenService } from './tokenService';
 import { getMentorFeedbackStyle } from '../data/mentors';
 
-// PRESERVED: Original progress interface
+// FIXED: Updated progress interface to match ProcessingProgress from progressiveFeedbackService
 export interface ChunkProcessingProgress {
   currentChunk: number;
   totalChunks: number;
   chunkTitle: string;
   progress: number; // 0-100
   message: string;
-  // NEW: Token information in progress updates
+  // FIXED: Added missing properties to match ProcessingProgress
+  isRetrying?: boolean;
+  retryCount?: number;
+  nextRetryIn?: number;
+  completedChunks: ChunkFeedback[]; // FIXED: Added this property
+  failedChunks: string[]; // FIXED: Added this property
+  processingType?: 'chunked' | 'single' | 'blended'; // FIXED: Added this property
+  mentorCount?: number; // FIXED: Added this property
+  blendingMentors?: string[]; // FIXED: Added this property
+  // Token information in progress updates
   tokensUsed?: number;
   remainingBalance?: number;
 }
@@ -33,26 +42,35 @@ export class FeedbackChunkService {
   /**
    * NEW: Token-aware chunked feedback generation
    * PRESERVED: All original functionality including batch processing and progress reporting
+   * FIXED: Now properly initializes completedChunks and failedChunks arrays
    */
   async generateChunkedFeedback(request: ChunkedFeedbackRequest): Promise<ChunkedFeedbackResponse> {
-    const { 
-      userId, 
-      chunks, 
-      mentor, 
-      characters, 
-      actionType = 'chunked_feedback',
-      scriptId,
-      onProgress,
-      abortSignal 
-    } = request;
+  const { 
+    userId, 
+    chunks, 
+    mentor, 
+    characters, 
+    actionType = 'chunked_feedback',
+    scriptId,
+    onProgress,
+    abortSignal 
+  } = request;
 
-    console.log('🧠 Starting chunked feedback generation with token validation via backend API:', {
-      userId,
-      mentor: mentor.name,
-      chunkCount: chunks.length,
-      strategy: chunks[0]?.chunkType || 'unknown',
-      actionType
-    });
+  // ADD DEBUG CODE HERE ↓
+  console.log('🔍 DEBUG: Chunks received:', {
+    chunks: chunks,
+    chunksLength: chunks?.length,
+    chunksType: typeof chunks,
+    isArray: Array.isArray(chunks)
+  });
+
+  console.log('🧠 Starting chunked feedback generation with token validation via backend API:', {
+    userId,
+    mentor: mentor.name,
+    chunkCount: chunks.length,
+    strategy: chunks[0]?.chunkType || 'unknown',
+    actionType
+  });
 
     try {
       // NEW: Check for cancellation before token validation
@@ -99,12 +117,17 @@ export class FeedbackChunkService {
         mentor,
         characters,
         onProgress: (progress) => {
-          // Add token info to progress updates
-          onProgress?.({
+          // FIXED: Ensure completedChunks and failedChunks are always defined
+          const enhancedProgress: ChunkProcessingProgress = {
             ...progress,
             tokensUsed,
-            remainingBalance
-          });
+            remainingBalance,
+            completedChunks: progress.completedChunks || [], // FIXED: Always provide array
+            failedChunks: progress.failedChunks || [], // FIXED: Always provide array
+            processingType: progress.processingType || 'chunked' // FIXED: Always provide type
+          };
+          
+          onProgress?.(enhancedProgress);
         },
         abortSignal
       });
@@ -154,57 +177,102 @@ export class FeedbackChunkService {
    * PRESERVED: Original chunked feedback generation (without token integration)
    * Used internally after token validation
    * ALWAYS uses backend API via aiFeedbackService
+   * FIXED: Now properly tracks completedChunks and failedChunks
    */
   private async performOriginalChunkedFeedback({
-    chunks,
-    mentor,
-    characters,
-    onProgress,
-    abortSignal
-  }: {
-    chunks: ScriptChunk[];
-    mentor: Mentor;
-    characters: Record<string, Character>;
-    onProgress?: (progress: ChunkProcessingProgress) => void;
-    abortSignal?: AbortSignal;
-  }): Promise<ChunkedScriptFeedback> {
-    
-    const startTime = Date.now();
-    const chunkFeedbacks: ChunkFeedback[] = [];
-    
-    // PRESERVED: Process chunks in parallel batches to avoid overwhelming the API
-    const batchSize = 3; // Process 3 chunks at a time
-    const batches = this.createBatches(chunks, batchSize);
+  chunks,
+  mentor,
+  characters,
+  onProgress,
+  abortSignal
+}: {
+  chunks: ScriptChunk[];
+  mentor: Mentor;
+  characters: Record<string, Character>;
+  onProgress?: (progress: ChunkProcessingProgress) => void;
+  abortSignal?: AbortSignal;
+}): Promise<ChunkedScriptFeedback> {
+  
+  // FIXED: Add null checks for chunks
+  if (!chunks || !Array.isArray(chunks) || chunks.length === 0) {
+    console.warn('⚠️ No chunks provided for feedback generation');
+    return this.createEmptyChunkedFeedback([], mentor);
+  }
+
+  console.log('🔍 DEBUG: Inside performOriginalChunkedFeedback:', {
+    chunksLength: chunks.length,
+    firstChunk: chunks[0],
+    mentor: mentor,
+    characters: Object.keys(characters || {}),
+    firstChunkCharacters: chunks[0]?.characters
+  });
+
+  const startTime = Date.now();
+  const chunkFeedbacks: ChunkFeedback[] = [];
+  // FIXED: Initialize arrays to track progress
+  const completedChunks: ChunkFeedback[] = [];
+  const failedChunks: string[] = [];
+  
+  // PRESERVED: Process chunks in parallel batches to avoid overwhelming the API
+  const batchSize = 3; // Process 3 chunks at a time
+  const batches = this.createBatches(chunks, batchSize);
     
     for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-      // Check for cancellation between batches
-      if (abortSignal?.aborted) {
-        throw new Error('Chunked feedback generation cancelled during processing');
-      }
+  // Check for cancellation between batches
+  if (abortSignal?.aborted) {
+    throw new Error('Chunked feedback generation cancelled during processing');
+  }
 
-      const batch = batches[batchIndex];
-      
-      // Process current batch
-      const batchPromises = batch.map(async (chunk) => {
-        const chunkIndex = chunks.indexOf(chunk);
-        
-        // Update progress
-        if (onProgress) {
-          onProgress({
-            currentChunk: chunkIndex + 1,
-            totalChunks: chunks.length,
-            chunkTitle: chunk.title,
-            progress: Math.round((chunkIndex / chunks.length) * 100),
-            message: `Analyzing ${chunk.title} via backend API...`
-          });
-        }
+  const batch = batches[batchIndex];
+  
+  // FIXED: Add null check for batch
+  if (!batch || !Array.isArray(batch)) {
+    console.warn('⚠️ Invalid batch encountered, skipping');
+    continue;
+  }
+
+  console.log('🔍 DEBUG: Processing batch:', {
+    batchIndex,
+    batchLength: batch.length,
+    batchContent: batch
+  });
+  
+  // Process current batch
+  const batchPromises = batch.map(async (chunk) => {
+    if (!chunk) {
+      console.warn('⚠️ Null chunk encountered, creating fallback');
+      const fallback = this.createFallbackChunkFeedback({ id: 'unknown', title: 'Unknown', content: '', characters: [] }, mentor);
+      failedChunks.push('unknown'); // FIXED: Track failed chunk
+      return fallback;
+    }
+
+    const chunkIndex = chunks.indexOf(chunk);
+    
+    // FIXED: Update progress with proper arrays
+    if (onProgress) {
+      onProgress({
+        currentChunk: chunkIndex + 1,
+        totalChunks: chunks.length,
+        chunkTitle: chunk?.title || 'Untitled Chunk',
+        progress: Math.round((chunkIndex / chunks.length) * 100),
+        message: `Analyzing ${chunk?.title || 'chunk'} via backend API...`,
+        completedChunks: [...completedChunks], // FIXED: Always provide array
+        failedChunks: [...failedChunks], // FIXED: Always provide array
+        processingType: 'chunked' // FIXED: Always provide type
+      });
+    }
 
         try {
-          return await this.generateChunkFeedbackViaBackend(chunk, mentor, characters, abortSignal);
+          const result = await this.generateChunkFeedbackViaBackend(chunk, mentor, characters, abortSignal);
+          completedChunks.push(result); // FIXED: Track completed chunk
+          return result;
         } catch (error) {
           console.error(`❌ Failed to generate feedback for ${chunk.title}:`, error);
+          failedChunks.push(chunk.id); // FIXED: Track failed chunk
           // Return fallback feedback for failed chunks
-          return this.createFallbackChunkFeedback(chunk, mentor);
+          const fallback = this.createFallbackChunkFeedback(chunk, mentor);
+          completedChunks.push(fallback); // FIXED: Still add to completed (as fallback)
+          return fallback;
         }
       });
 
@@ -233,14 +301,17 @@ export class FeedbackChunkService {
       averageTimePerChunk: `${Math.round(processingTime / chunks.length)}ms`
     });
 
-    // PRESERVED: Final progress update
+    // FIXED: Final progress update with proper arrays
     if (onProgress) {
       onProgress({
         currentChunk: chunks.length,
         totalChunks: chunks.length,
         chunkTitle: 'Complete',
         progress: 100,
-        message: 'Backend API analysis complete!'
+        message: 'Backend API analysis complete!',
+        completedChunks: [...completedChunks], // FIXED: Always provide array
+        failedChunks: [...failedChunks], // FIXED: Always provide array
+        processingType: 'chunked' // FIXED: Always provide type
       });
     }
 
@@ -306,30 +377,52 @@ export class FeedbackChunkService {
    * PRESERVED: Get characters that appear in this chunk
    */
   private getChunkCharacters(
-    chunk: ScriptChunk, 
-    allCharacters: Record<string, Character>
-  ): Record<string, Character> {
-    const chunkCharacters: Record<string, Character> = {};
-    
-    chunk.characters.forEach(charName => {
-      if (allCharacters[charName]) {
-        chunkCharacters[charName] = allCharacters[charName];
-      }
-    });
-
+  chunk: ScriptChunk, 
+  allCharacters: Record<string, Character>
+): Record<string, Character> {
+  const chunkCharacters: Record<string, Character> = {};
+  
+  // FIXED: Add null checks
+  if (!chunk || !chunk.characters || !Array.isArray(chunk.characters)) {
+    console.warn('⚠️ Invalid chunk or chunk.characters provided');
     return chunkCharacters;
   }
+
+  if (!allCharacters || typeof allCharacters !== 'object') {
+    console.warn('⚠️ Invalid allCharacters provided');
+    return chunkCharacters;
+  }
+  
+  chunk.characters.forEach(charName => {
+    if (charName && allCharacters[charName]) {
+      chunkCharacters[charName] = allCharacters[charName];
+    }
+  });
+
+  return chunkCharacters;
+}
 
   /**
    * PRESERVED: Create batches for parallel processing
    */
   private createBatches<T>(items: T[], batchSize: number): T[][] {
-    const batches: T[][] = [];
-    for (let i = 0; i < items.length; i += batchSize) {
-      batches.push(items.slice(i, i + batchSize));
-    }
-    return batches;
+  // FIXED: Add null checks
+  if (!items || !Array.isArray(items) || items.length === 0) {
+    console.warn('⚠️ Invalid items array provided to createBatches');
+    return [];
   }
+
+  if (batchSize <= 0) {
+    console.warn('⚠️ Invalid batch size, using default of 1');
+    batchSize = 1;
+  }
+
+  const batches: T[][] = [];
+  for (let i = 0; i < items.length; i += batchSize) {
+    batches.push(items.slice(i, i + batchSize));
+  }
+  return batches;
+}
 
   /**
    * PRESERVED: Generate an overall summary of the script based on chunk feedback
@@ -503,55 +596,57 @@ export class FeedbackChunkService {
    * PRESERVED: Create fallback feedback for failed chunks
    */
   private createFallbackChunkFeedback(chunk: ScriptChunk, mentor: Mentor): ChunkFeedback {
-    return {
-      chunkId: chunk.id,
-      chunkTitle: chunk.title,
-      structuredContent: `## ${mentor.name} Analysis - ${chunk.title}\n\n### Analysis Pending\n• This section requires detailed backend API analysis\n• Please retry for comprehensive feedback\n\n"${mentor.mantra}"`,
-      scratchpadContent: `## ${mentor.name} Notes - ${chunk.title}\n\n### Initial Observation\n• Section needs full backend API analysis for specific insights\n• Contains ${chunk.content.length} characters of content\n\n### Next Steps\n• Retry analysis for detailed feedback\n\n"${mentor.mantra}"`,
-      mentorId: mentor.id,
-      timestamp: new Date(),
-      categories: {
-        structure: 'Requires backend API analysis',
-        dialogue: 'Requires backend API analysis', 
-        pacing: 'Requires backend API analysis',
-        theme: 'Requires backend API analysis'
-      }
-    };
-  }
+  return {
+    chunkId: chunk?.id || 'unknown_chunk',
+    chunkTitle: chunk?.title || 'Unknown Chunk',
+    structuredContent: `## ${mentor?.name || 'Unknown Mentor'} Analysis - ${chunk?.title || 'Unknown Chunk'}\n\n### Analysis Pending\n• This section requires detailed backend API analysis\n• Please retry for comprehensive feedback\n\n"${mentor?.mantra || 'Every word must earn its place on the page.'}"`,
+    scratchpadContent: `## ${mentor?.name || 'Unknown Mentor'} Notes - ${chunk?.title || 'Unknown Chunk'}\n\n### Initial Observation\n• Section needs full backend API analysis for specific insights\n• Contains ${chunk?.content?.length || 0} characters of content\n\n### Next Steps\n• Retry analysis for detailed feedback\n\n"${mentor?.mantra || 'Every word must earn its place on the page.'}"`,
+    mentorId: mentor?.id || 'unknown',
+    timestamp: new Date(),
+    categories: {
+      structure: 'Requires backend API analysis',
+      dialogue: 'Requires backend API analysis', 
+      pacing: 'Requires backend API analysis',
+      theme: 'Requires backend API analysis'
+    }
+  };
+}
 
   /**
    * NEW: Create empty chunked feedback for error cases
    */
   private createEmptyChunkedFeedback(chunks: ScriptChunk[], mentor: Mentor): ChunkedScriptFeedback {
-    const emptyChunks: ChunkFeedback[] = chunks.map(chunk => ({
-      chunkId: chunk.id,
-      chunkTitle: chunk.title,
-      structuredContent: 'Feedback generation failed. Please try again.',
-      scratchpadContent: 'Unable to generate feedback at this time.',
-      mentorId: mentor.id,
-      timestamp: new Date(),
-      categories: {
-        structure: 'Error',
-        dialogue: 'Error',
-        pacing: 'Error',
-        theme: 'Error'
-      }
-    }));
+  // FIXED: Add null checks
+  const safeChunks = chunks || [];
+  const emptyChunks: ChunkFeedback[] = safeChunks.map(chunk => ({
+    chunkId: chunk?.id || 'unknown',
+    chunkTitle: chunk?.title || 'Unknown Chunk',
+    structuredContent: 'Feedback generation failed. Please try again.',
+    scratchpadContent: 'Unable to generate feedback at this time.',
+    mentorId: mentor?.id || 'unknown',
+    timestamp: new Date(),
+    categories: {
+      structure: 'Error',
+      dialogue: 'Error',
+      pacing: 'Error',
+      theme: 'Error'
+    }
+  }));
 
-    return {
-      id: `error_chunked_feedback_${Date.now()}`,
-      scriptId: chunks[0]?.id.split('_chunk_')[0] || 'unknown',
-      mentorId: mentor.id,
-      chunks: emptyChunks,
-      summary: {
-        overallStructure: 'Feedback generation failed',
-        keyStrengths: [],
-        majorIssues: ['System error prevented analysis'],
-        globalRecommendations: ['Please try again later']
-      },
-      timestamp: new Date()
-    };
-  }
+  return {
+    id: `error_chunked_feedback_${Date.now()}`,
+    scriptId: safeChunks[0]?.id.split('_chunk_')[0] || 'unknown',
+    mentorId: mentor?.id || 'unknown',
+    chunks: emptyChunks,
+    summary: {
+      overallStructure: 'Feedback generation failed',
+      keyStrengths: [],
+      majorIssues: ['System error prevented analysis'],
+      globalRecommendations: ['Please try again later']
+    },
+    timestamp: new Date()
+  };
+}
 
   /**
    * NEW: Validate tokens before chunked feedback processing (public method)

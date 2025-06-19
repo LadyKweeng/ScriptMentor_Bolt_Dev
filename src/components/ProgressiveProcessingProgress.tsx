@@ -33,12 +33,14 @@ const ProgressiveProcessingProgress: React.FC<ProgressiveProcessingProgressProps
   mentor,
   onCancel
 }) => {
-  const isComplete = progress.progress >= 100;
-  const progressPercentage = Math.min(progress.progress, 100);
-  const rateLimitedChunks = progress.completedChunks.filter(chunk => (chunk as any).processingError === 'rate limit').length;
-  const otherFailedChunks = progress.completedChunks.filter(chunk => (chunk as any).processingError && (chunk as any).processingError !== 'rate limit').length;
+  // FIXED: Add null checks and default values
+  const completedChunks = progress.completedChunks || [];
+  const isComplete = (progress.progress || 0) >= 100;
+  const progressPercentage = Math.min(progress.progress || 0, 100);
+  const rateLimitedChunks = completedChunks.filter(chunk => (chunk as any).processingError === 'rate limit').length;
+  const otherFailedChunks = completedChunks.filter(chunk => (chunk as any).processingError && (chunk as any).processingError !== 'rate limit').length;
   const hasFailures = rateLimitedChunks > 0 || otherFailedChunks > 0;
-  const hasPartialResults = progress.completedChunks.length > 0;
+  const hasPartialResults = completedChunks.length > 0;
 
   // Processing type specific configurations
   const getProcessingTypeConfig = () => {
@@ -79,7 +81,7 @@ const ProgressiveProcessingProgress: React.FC<ProgressiveProcessingProgressProps
   // Enhanced title for different processing types
   const getEnhancedTitle = () => {
     if (progress.processingType === 'blended') {
-      return `${mentor.name} (${progress.mentorCount} Mentors)`;
+      return `${mentor.name} (${progress.mentorCount || 'Multiple'} Mentors)`;
     }
     return `${mentor.name} Progressive Analysis`;
   };
@@ -144,7 +146,7 @@ const ProgressiveProcessingProgress: React.FC<ProgressiveProcessingProgressProps
               {progress.processingType === 'single' ? 'Scene Progress' : 'Section Progress'}
             </span>
             <span className="text-sm text-slate-400">
-              {progress.currentChunk}/{progress.totalChunks}
+              {progress.currentChunk || 0}/{progress.totalChunks || 0}
             </span>
           </div>
           
@@ -163,8 +165,8 @@ const ProgressiveProcessingProgress: React.FC<ProgressiveProcessingProgressProps
             <span className="text-slate-500">{progressPercentage}% complete</span>
             <span className="text-slate-400">
               {isComplete ? 'Analysis complete!' : 
-               progress.isRetrying ? `Retry ${progress.retryCount! + 1}` :
-               `${progress.totalChunks - progress.currentChunk} ${progress.processingType === 'single' ? 'steps' : 'sections'} remaining`}
+               progress.isRetrying ? `Retry ${(progress.retryCount || 0) + 1}` :
+               `${(progress.totalChunks || 0) - (progress.currentChunk || 0)} ${progress.processingType === 'single' ? 'steps' : 'sections'} remaining`}
             </span>
           </div>
         </div>
@@ -189,11 +191,11 @@ const ProgressiveProcessingProgress: React.FC<ProgressiveProcessingProgressProps
           </div>
           
           <div className="text-sm text-slate-300 mb-2">
-            {progress.chunkTitle}
+            {progress.chunkTitle || 'Processing...'}
           </div>
           
           <div className="text-xs text-slate-400">
-            {progress.message}
+            {progress.message || 'Starting analysis...'}
           </div>
 
           {/* Blended mentors display */}
@@ -228,7 +230,7 @@ const ProgressiveProcessingProgress: React.FC<ProgressiveProcessingProgressProps
               <CheckCircle className="h-4 w-4 text-green-400" />
             </div>
             <div className="text-sm font-medium text-white">
-              {progress.completedChunks.filter(chunk => !(chunk as any).processingError).length}
+              {completedChunks.filter(chunk => !(chunk as any).processingError).length}
             </div>
             <div className="text-xs text-slate-400">
               {progress.processingType === 'blended' ? 'Blended' : 'AI Analyzed'}
@@ -252,7 +254,7 @@ const ProgressiveProcessingProgress: React.FC<ProgressiveProcessingProgressProps
               <typeConfig.icon className={`h-4 w-4 ${typeConfig.color}`} />
             </div>
             <div className="text-sm font-medium text-white">
-              {progress.totalChunks}
+              {progress.totalChunks || 0}
             </div>
             <div className="text-xs text-slate-400">
               Total
@@ -333,9 +335,9 @@ const ProgressiveProcessingProgress: React.FC<ProgressiveProcessingProgressProps
             </div>
             <p className="text-xs text-slate-400 text-center">
               {(() => {
-                const aiAnalyzed = progress.completedChunks.filter(chunk => !(chunk as any).processingError).length;
-                const rateLimited = progress.completedChunks.filter(chunk => (chunk as any).processingError === 'rate limit').length;
-                const otherFailed = progress.completedChunks.filter(chunk => (chunk as any).processingError && (chunk as any).processingError !== 'rate limit').length;
+                const aiAnalyzed = completedChunks.filter(chunk => !(chunk as any).processingError).length;
+                const rateLimited = completedChunks.filter(chunk => (chunk as any).processingError === 'rate limit').length;
+                const otherFailed = completedChunks.filter(chunk => (chunk as any).processingError && (chunk as any).processingError !== 'rate limit').length;
                 
                 if (progress.processingType === 'single') {
                   return aiAnalyzed > 0 ? 'Scene analyzed with AI feedback' : 'Scene analysis completed';
@@ -347,7 +349,7 @@ const ProgressiveProcessingProgress: React.FC<ProgressiveProcessingProgressProps
                   } else if (otherFailed > 0) {
                     return `${aiAnalyzed} sections blended, ${otherFailed} had processing issues`;
                   } else {
-                    return `All ${progress.completedChunks.length} sections analyzed with blended mentor feedback`;
+                    return `All ${completedChunks.length} sections analyzed with blended mentor feedback`;
                   }
                 } else {
                   if (rateLimited > 0 && otherFailed > 0) {
@@ -357,7 +359,7 @@ const ProgressiveProcessingProgress: React.FC<ProgressiveProcessingProgressProps
                   } else if (otherFailed > 0) {
                     return `${aiAnalyzed} AI analyzed, ${otherFailed} had processing issues`;
                   } else {
-                    return `All ${progress.completedChunks.length} sections analyzed with AI feedback`;
+                    return `All ${completedChunks.length} sections analyzed with AI feedback`;
                   }
                 }
               })()}
