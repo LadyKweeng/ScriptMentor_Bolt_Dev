@@ -1,6 +1,8 @@
-// src/services/writerAgentService.ts
-import { Feedback, Mentor } from '../types';
+// src/services/writerAgentService.ts - Complete enhanced version with token integration + ALL original features
+import { Feedback, Mentor, TokenAwareRequest, TokenAwareResponse } from '../types';
+import { tokenService } from './tokenService';
 
+// PRESERVED: Original interfaces
 export interface WriterSuggestion {
   note: string;
   suggestion: string;
@@ -19,13 +21,98 @@ export interface WriterSuggestionsResponse {
   error?: string;
 }
 
+// NEW: Token-aware interfaces
+interface WriterAgentRequest extends TokenAwareRequest {
+  feedback: Feedback;
+  mentor: Mentor;
+}
+
+interface WriterAgentResponse extends TokenAwareResponse<WriterSuggestionsResponse> {
+  suggestions: WriterSuggestionsResponse;
+}
+
 export class WriterAgentService {
   private baseUrl = 'https://smbackend-production.up.railway.app/api';
 
   /**
-   * Generate writer suggestions from mentor feedback with enhanced blended feedback support
+   * NEW: Token-aware writer suggestions generation
+   * PRESERVED: All original enhanced blended feedback support
    */
-   async generateWriterSuggestions(
+  async generateWriterSuggestions(request: WriterAgentRequest): Promise<WriterAgentResponse> {
+    const { userId, feedback, mentor, actionType = 'writer_agent', scriptId } = request;
+
+    console.log('✍️ Writer Agent generating suggestions with token validation:', {
+      userId,
+      mentor: mentor.name,
+      mentorId: mentor.id,
+      feedbackId: feedback.id,
+      feedbackType: this.determineFeedbackType(feedback),
+      isBlended: mentor.id === 'blended',
+      feedbackLength: this.getFeedbackText(feedback).length,
+      actionType
+    });
+
+    try {
+      // NEW: Step 1 - Token validation and deduction
+      const tokenResult = await tokenService.processTokenTransaction(
+        userId,
+        actionType,
+        scriptId,
+        mentor.id
+      );
+
+      if (!tokenResult.success) {
+        const errorMessage = tokenResult.validation.hasEnoughTokens 
+          ? 'Token deduction failed due to system error'
+          : `Insufficient tokens for Writer Agent. Need ${tokenResult.validation.requiredTokens}, have ${tokenResult.validation.currentBalance}`;
+        
+        return {
+          success: false,
+          error: errorMessage,
+          suggestions: this.createEmptyWriterSuggestions(mentor.id),
+          tokenInfo: {
+            tokensUsed: 0,
+            remainingBalance: tokenResult.validation.currentBalance,
+            action: actionType
+          }
+        };
+      }
+
+      // PRESERVED: Step 2 - Original writer suggestions generation logic
+      const suggestionsResult = await this.performOriginalWriterSuggestions(feedback, mentor);
+      
+      return {
+        success: true,
+        suggestions: suggestionsResult,
+        data: suggestionsResult,
+        tokenInfo: {
+          tokensUsed: tokenService.getTokenCost(actionType),
+          remainingBalance: tokenResult.validation.currentBalance,
+          action: actionType
+        }
+      };
+
+    } catch (error: any) {
+      console.error('❌ Writer Agent generation failed:', error);
+      
+      return {
+        success: false,
+        error: `Writer suggestions generation failed: ${error.message}`,
+        suggestions: this.createEmptyWriterSuggestions(mentor.id),
+        tokenInfo: {
+          tokensUsed: tokenService.getTokenCost(actionType),
+          remainingBalance: 0, // We don't know the balance after failure
+          action: actionType
+        }
+      };
+    }
+  }
+
+  /**
+   * PRESERVED: Original writer suggestions generation with enhanced blended feedback support
+   * Used internally after token validation
+   */
+  private async performOriginalWriterSuggestions(
     feedback: Feedback,
     mentor: Mentor
   ): Promise<WriterSuggestionsResponse> {
@@ -39,7 +126,7 @@ export class WriterAgentService {
     });
   
     try {
-      // Get the feedback text (prefer structured over legacy content)
+      // PRESERVED: Get the feedback text (prefer structured over legacy content)
       const feedbackText = this.getFeedbackText(feedback);
       
       if (!feedbackText || feedbackText.trim().length === 0) {
@@ -47,7 +134,7 @@ export class WriterAgentService {
         throw new Error('No valid feedback content found');
       }
   
-      // ENHANCED: Additional validation for blended feedback
+      // PRESERVED: Additional validation for blended feedback
       if (mentor.id === 'blended') {
         console.log('🎭 Processing blended mentor feedback for writer suggestions');
         
@@ -57,7 +144,7 @@ export class WriterAgentService {
         }
       }
       
-      // Enhanced request payload for blended feedback
+      // PRESERVED: Enhanced request payload for blended feedback
       const requestPayload = {
         feedback_text: feedbackText,
         mentor_id: mentor.id,
@@ -66,7 +153,7 @@ export class WriterAgentService {
           categories: feedback.categories || {},
           timestamp: feedback.timestamp,
           is_blended: mentor.id === 'blended',
-          mentor_name: mentor.name, // ADDED: Include mentor name for better processing
+          mentor_name: mentor.name, // PRESERVED: Include mentor name for better processing
           ...(mentor.id === 'blended' && {
             blended_context: 'This feedback combines insights from multiple mentoring perspectives',
             blended_tone: mentor.tone || 'Multi-perspective approach'
@@ -97,7 +184,7 @@ export class WriterAgentService {
           isBlended: mentor.id === 'blended'
         });
         
-        // Fall back to enhanced mock suggestions
+        // PRESERVED: Fall back to enhanced mock suggestions
         return this.generateEnhancedMockSuggestions(feedback, mentor);
       }
   
@@ -120,13 +207,13 @@ export class WriterAgentService {
     } catch (error) {
       console.warn('❌ Writer Agent API failed, falling back to enhanced mock suggestions:', error);
       
-      // ENHANCED: Always fallback to mock suggestions rather than throwing
+      // PRESERVED: Always fallback to mock suggestions rather than throwing
       return this.generateEnhancedMockSuggestions(feedback, mentor);
     }
   }
 
   /**
-   * Determine the type of feedback for better processing
+   * PRESERVED: Determine the type of feedback for better processing
    */
   private determineFeedbackType(feedback: Feedback): string {
     if ((feedback as any).chunkId) return 'chunk';
@@ -135,9 +222,9 @@ export class WriterAgentService {
   }
 
   /**
-   * Extract feedback text from feedback object with improved handling for blended feedback
+   * PRESERVED: Extract feedback text from feedback object with improved handling for blended feedback
    */
-   private getFeedbackText(feedback: Feedback): string {
+  private getFeedbackText(feedback: Feedback): string {
     console.log('🔍 Extracting feedback text...', {
       hasStructured: !!feedback.structuredContent,
       hasScratchpad: !!feedback.scratchpadContent,
@@ -150,7 +237,7 @@ export class WriterAgentService {
     // For chunked feedback, we should have either structured or scratchpad content
     let feedbackText = '';
     
-    // ENHANCED: Better prioritization for blended feedback
+    // PRESERVED: Better prioritization for blended feedback
     // Prefer structured content for blended feedback as it's more comprehensive
     if (feedback.structuredContent && feedback.structuredContent.trim()) {
       feedbackText = feedback.structuredContent;
@@ -167,7 +254,7 @@ export class WriterAgentService {
       console.log('📝 Using legacy content:', feedbackText.length, 'characters');
     }
   
-    // ENHANCED: Additional validation with better error handling
+    // PRESERVED: Additional validation with better error handling
     if (!feedbackText || feedbackText.trim().length < 10) {
       console.warn('⚠️ Insufficient feedback content found:', {
         structuredLength: feedback.structuredContent?.length || 0,
@@ -177,11 +264,11 @@ export class WriterAgentService {
         feedbackId: feedback.id
       });
       
-      // ENHANCED: Create more detailed fallback for blended feedback
+      // PRESERVED: Create more detailed fallback for blended feedback
       return this.createFallbackFeedbackText(feedback);
     }
   
-    // ENHANCED: Post-processing for blended feedback
+    // PRESERVED: Post-processing for blended feedback
     if (feedback.mentorId === 'blended' && feedbackText.length > 0) {
       console.log('🎭 Post-processing blended feedback text');
       
@@ -203,9 +290,9 @@ export class WriterAgentService {
   }
 
   /**
-   * Create fallback feedback text when no valid content is found
+   * PRESERVED: Create fallback feedback text when no valid content is found
    */
-   private createFallbackFeedbackText(feedback: Feedback): string {
+  private createFallbackFeedbackText(feedback: Feedback): string {
     const mentor = feedback.mentorId;
     const categories = feedback.categories || {};
     const isBlended = mentor === 'blended';
@@ -214,7 +301,7 @@ export class WriterAgentService {
       ? `Blended feedback analysis combining multiple mentoring perspectives:\n\n`
       : `Feedback from ${mentor}:\n\n`;
     
-    // ENHANCED: Better category handling for blended feedback
+    // PRESERVED: Better category handling for blended feedback
     const categoryEntries = Object.entries(categories);
     if (categoryEntries.length > 0) {
       categoryEntries.forEach(([category, content]) => {
@@ -229,7 +316,7 @@ export class WriterAgentService {
       });
     }
     
-    // If still no content, create very basic fallback with enhanced blended handling
+    // PRESERVED: If still no content, create very basic fallback with enhanced blended handling
     if (fallbackText.trim().length < 100) {
       const contextText = (feedback as any).chunkId ? 'this section' : 'the scene';
       
@@ -255,7 +342,7 @@ export class WriterAgentService {
   }
 
   /**
-   * Generate enhanced mock suggestions with better blended feedback support
+   * PRESERVED: Generate enhanced mock suggestions with better blended feedback support
    */
   private generateEnhancedMockSuggestions(
     feedback: Feedback,
@@ -273,7 +360,7 @@ export class WriterAgentService {
     const suggestions: WriterSuggestion[] = [];
 
     if (isBlended) {
-      // Generate blended suggestions that combine multiple perspectives
+      // PRESERVED: Generate blended suggestions that combine multiple perspectives
       const blendedIssues = this.extractBlendedIssuesFromFeedback(feedbackText);
       
       blendedIssues.forEach(issue => {
@@ -283,13 +370,13 @@ export class WriterAgentService {
         }
       });
       
-      // Ensure we have comprehensive blended suggestions
+      // PRESERVED: Ensure we have comprehensive blended suggestions
       if (suggestions.length < 3) {
         const defaultBlendedSuggestions = this.getDefaultBlendedSuggestions();
         suggestions.push(...defaultBlendedSuggestions.slice(0, 4 - suggestions.length));
       }
     } else {
-      // Generate regular mentor-specific suggestions
+      // PRESERVED: Generate regular mentor-specific suggestions
       const issues = this.extractIssuesFromFeedback(feedbackText, mentor);
       
       issues.forEach(issue => {
@@ -299,7 +386,7 @@ export class WriterAgentService {
         }
       });
 
-      // Ensure we have at least 2-3 suggestions
+      // PRESERVED: Ensure we have at least 2-3 suggestions
       if (suggestions.length < 2) {
         const defaultSuggestions = this.getDefaultSuggestions(mentor);
         suggestions.push(...defaultSuggestions.slice(0, 3 - suggestions.length));
@@ -322,13 +409,13 @@ export class WriterAgentService {
   }
 
   /**
-   * Extract issues from blended feedback that combines multiple perspectives
+   * PRESERVED: Extract issues from blended feedback that combines multiple perspectives
    */
   private extractBlendedIssuesFromFeedback(feedbackText: string): string[] {
     const issues: string[] = [];
     const lowercaseText = feedbackText.toLowerCase();
 
-    // Blended-specific issue patterns that indicate consensus across mentors
+    // PRESERVED: Blended-specific issue patterns that indicate consensus across mentors
     const blendedPatterns = [
       { 
         pattern: /(?:multiple|several|various).+(?:mentor|perspective|approach).+(?:agree|consensus|similar)/i, 
@@ -362,7 +449,7 @@ export class WriterAgentService {
       }
     });
 
-    // If no blended-specific patterns, extract general issues and frame them as blended
+    // PRESERVED: If no blended-specific patterns, extract general issues and frame them as blended
     if (issues.length === 0) {
       const generalPatterns = [
         { pattern: /dialogue/i, issue: 'Dialogue quality assessed from multiple mentoring perspectives' },
@@ -383,7 +470,7 @@ export class WriterAgentService {
   }
 
   /**
-   * Generate blended suggestions that combine multiple mentoring perspectives
+   * PRESERVED: Generate blended suggestions that combine multiple mentoring perspectives
    */
   private generateBlendedSuggestionForIssue(issue: string): WriterSuggestion | null {
     const blendedSuggestions: Record<string, string> = {
@@ -413,7 +500,7 @@ export class WriterAgentService {
   }
 
   /**
-   * Get default blended suggestions that combine multiple mentoring perspectives
+   * PRESERVED: Get default blended suggestions that combine multiple mentoring perspectives
    */
   private getDefaultBlendedSuggestions(): WriterSuggestion[] {
     return [
@@ -441,13 +528,13 @@ export class WriterAgentService {
   }
 
   /**
-   * Extract key issues from feedback text with improved pattern matching
+   * PRESERVED: Extract key issues from feedback text with improved pattern matching
    */
   private extractIssuesFromFeedback(feedbackText: string, mentor: Mentor): string[] {
     const issues: string[] = [];
     const lowercaseText = feedbackText.toLowerCase();
 
-    // Enhanced issue patterns with more specific detection
+    // PRESERVED: Enhanced issue patterns with more specific detection
     const issuePatterns = [
       { 
         pattern: /dialogue.*(?:weak|stiff|unnatural|exposition|telling|clunky)/i, 
@@ -497,7 +584,7 @@ export class WriterAgentService {
       }
     });
 
-    // Add mentor-specific issues based on content analysis
+    // PRESERVED: Add mentor-specific issues based on content analysis
     switch (mentor.id) {
       case 'tony-gilroy':
         if (lowercaseText.includes('cut') || lowercaseText.includes('unnecessary') || lowercaseText.includes('remove')) {
@@ -560,13 +647,13 @@ export class WriterAgentService {
         break;
     }
 
-    // Remove duplicates and limit to reasonable number
+    // PRESERVED: Remove duplicates and limit to reasonable number
     const uniqueIssues = [...new Set(issues)];
     return uniqueIssues.slice(0, 6);
   }
 
   /**
-   * Generate a suggestion for a specific issue with mentor-specific advice
+   * PRESERVED: Generate a suggestion for a specific issue with mentor-specific advice
    */
   private generateSuggestionForIssue(issue: string, mentor: Mentor): WriterSuggestion | null {
     const suggestions: Record<string, Record<string, string>> = {
@@ -639,7 +726,7 @@ export class WriterAgentService {
   }
 
   /**
-   * Get default suggestions for each mentor with improved quality
+   * PRESERVED: Get default suggestions for each mentor with improved quality
    */
   private getDefaultSuggestions(mentor: Mentor): WriterSuggestion[] {
     const defaults: Record<string, WriterSuggestion[]> = {
@@ -679,7 +766,20 @@ export class WriterAgentService {
   }
 
   /**
-   * Test the writer agent service
+   * NEW: Create empty writer suggestions for error cases
+   */
+  private createEmptyWriterSuggestions(mentorId: string): WriterSuggestionsResponse {
+    return {
+      suggestions: [],
+      success: false,
+      mentor_id: mentorId,
+      timestamp: new Date().toISOString(),
+      error: 'Writer suggestions generation failed. Please try again.'
+    };
+  }
+
+  /**
+   * PRESERVED: Test the writer agent service
    */
   async testConnection(): Promise<{ success: boolean; message: string; data?: any }> {
     try {
@@ -706,6 +806,54 @@ export class WriterAgentService {
         message: `Writer Agent connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       };
     }
+  }
+
+  /**
+   * NEW: Validate tokens before writer agent processing (public method)
+   */
+  async validateTokensForWriterAgent(userId: string): Promise<{
+    canProceed: boolean;
+    cost: number;
+    currentBalance: number;
+    shortfall?: number;
+  }> {
+    try {
+      const cost = tokenService.getTokenCost('writer_agent');
+      const validation = await tokenService.validateTokenBalance(userId, cost);
+      
+      return {
+        canProceed: validation.hasEnoughTokens,
+        cost,
+        currentBalance: validation.currentBalance,
+        shortfall: validation.shortfall
+      };
+    } catch (error) {
+      console.error('Error validating tokens for writer agent:', error);
+      return {
+        canProceed: false,
+        cost: tokenService.getTokenCost('writer_agent'),
+        currentBalance: 0
+      };
+    }
+  }
+
+  /**
+   * NEW: Get token cost for writer agent (public method)
+   */
+  getTokenCost(): number {
+    return tokenService.getTokenCost('writer_agent');
+  }
+
+  /**
+   * PRESERVED: Legacy method for backward compatibility (without token integration)
+   */
+  async generateWriterSuggestionsLegacy(
+    feedback: Feedback,
+    mentor: Mentor
+  ): Promise<WriterSuggestionsResponse> {
+    console.log('🔄 Legacy writer suggestions generation requested');
+    
+    return this.performOriginalWriterSuggestions(feedback, mentor);
   }
 }
 

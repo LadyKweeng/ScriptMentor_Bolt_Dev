@@ -1,19 +1,45 @@
-// src/services/aiFeedbackService.ts - Complete enhanced version with cancellation support
-import { Mentor, ScriptScene, Feedback, ScriptRewrite, Character } from '../types';
+// src/services/aiFeedbackService.ts - Complete enhanced version with token integration + all original features
+import { Mentor, ScriptScene, Feedback, ScriptRewrite, Character, TokenAwareRequest, TokenAwareResponse } from '../types';
 import { backendApiService } from './backendApiService';
+import { tokenService } from './tokenService';
 import { getMentorFeedbackStyle } from '../data/mentors';
 import { CharacterDataNormalizer } from '../utils/characterDataNormalizer';
 
+// PRESERVED: Original interfaces
 interface AIFeedbackRequest {
   scene: ScriptScene;
   mentor: Mentor;
   characters: Record<string, Character>;
-  abortSignal?: AbortSignal; // NEW: Add abort signal support
+  abortSignal?: AbortSignal;
 }
 
 interface AIFeedbackResponse {
   feedback: Feedback;
   rewrite?: ScriptRewrite;
+}
+
+// NEW: Token-aware interfaces (extending original)
+interface TokenAwareAIFeedbackRequest extends AIFeedbackRequest, TokenAwareRequest {}
+
+interface TokenAwareAIFeedbackResponse extends TokenAwareResponse<Feedback> {
+  feedback: Feedback;
+  rewrite?: ScriptRewrite;
+}
+
+interface BlendedFeedbackRequest extends TokenAwareRequest {
+  scene: ScriptScene;
+  mentors: Mentor[];
+  mentorWeights: Record<string, number>;
+  characters: Record<string, Character>;
+  abortSignal?: AbortSignal;
+}
+
+// PRESERVED: Original ScriptRewrite interface (if not in types)
+interface ScriptRewrite {
+  id: string;
+  content: string;
+  changes: string[];
+  reasoning: string;
 }
 
 class AIFeedbackService {
@@ -34,21 +60,127 @@ class AIFeedbackService {
   }
   
   /**
-   * MAIN ENTRY POINT: Generate dual feedback using backend API for ALL modes
-   * ENHANCED: Now with cancellation support
+   * NEW: Token-aware dual feedback generation
+   * ENHANCED: Preserves original functionality + adds token validation
    */
-  async generateDualFeedback(request: AIFeedbackRequest): Promise<AIFeedbackResponse> {
-    console.log('🤖 AI Service generating dual feedback with cancellation support:', {
+  async generateDualFeedback(request: TokenAwareAIFeedbackRequest): Promise<TokenAwareAIFeedbackResponse> {
+    const { userId, scene, mentor, characters, actionType = 'single_feedback', scriptId, mentorId, sceneId, abortSignal } = request;
+    
+    console.log('🤖 AI Service generating dual feedback with token validation + cancellation support:', {
+      userId,
+      mentor: mentor.name,
+      mentorId: mentor.id,
+      sceneLength: scene.content.length,
+      characterCount: Object.keys(characters).length,
+      isBlended: mentor.id === 'blended',
+      canCancel: !!abortSignal,
+      actionType
+    });
+
+    try {
+      // NEW: Check for cancellation before token validation
+      if (abortSignal?.aborted) {
+        throw new Error('Request cancelled before processing');
+      }
+
+      // NEW: Step 1 - Token validation and deduction
+      const tokenResult = await tokenService.processTokenTransaction(
+        userId,
+        actionType,
+        scriptId || scene.id,
+        mentorId || mentor.id,
+        sceneId || scene.id
+      );
+
+      if (!tokenResult.success) {
+        const errorMessage = tokenResult.validation.hasEnoughTokens 
+          ? 'Token deduction failed due to system error'
+          : `Insufficient tokens. Need ${tokenResult.validation.requiredTokens}, have ${tokenResult.validation.currentBalance}`;
+        
+        return {
+          success: false,
+          error: errorMessage,
+          feedback: this.createEmptyFeedback(scene, mentor),
+          tokenInfo: {
+            tokensUsed: 0,
+            remainingBalance: tokenResult.validation.currentBalance,
+            action: actionType
+          }
+        };
+      }
+
+      // NEW: Check for cancellation after token processing
+      if (abortSignal?.aborted) {
+        throw new Error('Request cancelled after token processing');
+      }
+
+      // PRESERVED: Step 2 - Original feedback generation logic
+      const feedbackResult = await this.performOriginalDualFeedback({
+        scene,
+        mentor,
+        characters,
+        abortSignal
+      });
+      
+      return {
+        success: true,
+        feedback: feedbackResult.feedback,
+        rewrite: feedbackResult.rewrite,
+        data: feedbackResult.feedback,
+        tokenInfo: {
+          tokensUsed: tokenService.getTokenCost(actionType),
+          remainingBalance: tokenResult.validation.currentBalance,
+          action: actionType
+        }
+      };
+
+    } catch (error: any) {
+      console.error('❌ AI Feedback generation failed:', error);
+      
+      // Handle cancellation vs other errors
+      if (abortSignal?.aborted || error.message?.includes('cancelled')) {
+        return {
+          success: false,
+          error: 'Feedback generation cancelled by user',
+          feedback: this.createEmptyFeedback(scene, mentor),
+          tokenInfo: {
+            tokensUsed: 0,
+            remainingBalance: 0,
+            action: actionType
+          }
+        };
+      }
+      
+      return {
+        success: false,
+        error: `Feedback generation failed: ${error.message}`,
+        feedback: this.createEmptyFeedback(scene, mentor),
+        tokenInfo: {
+          tokensUsed: tokenService.getTokenCost(actionType),
+          remainingBalance: 0, // We don't know the balance after failure
+          action: actionType
+        }
+      };
+    }
+  }
+
+  /**
+   * PRESERVED: Original dual feedback generation (without token integration)
+   * Used internally after token validation
+   * NEW: Made public for use by other services (like feedbackChunkService)
+   */
+  async performOriginalDualFeedback(request: AIFeedbackRequest): Promise<AIFeedbackResponse> {
+    console.log('🤖 Performing original dual feedback generation:', {
       mentor: request.mentor.name,
       mentorId: request.mentor.id,
       sceneLength: request.scene.content.length,
       characterCount: Object.keys(request.characters).length,
       isBlended: request.mentor.id === 'blended',
-      canCancel: !!request.abortSignal // NEW: Log cancellation capability
+      canCancel: !!request.abortSignal
     });
     
     try {
-      // NEW: Check for cancellation before starting
+      // Check for cancellation before starting
       if (request.abortSignal?.aborted) {
         throw new Error('Request cancelled before processing');
       }
@@ -59,7 +191,7 @@ class AIFeedbackService {
       // Build character context with proper error handling
       const characterContext = this.buildCharacterContext(request.characters);
       
-      // NEW: Check for cancellation before backend calls
+      // Check for cancellation before backend calls
       if (request.abortSignal?.aborted) {
         throw new Error('Request cancelled before backend calls');
       }
@@ -70,7 +202,7 @@ class AIFeedbackService {
         this.generateBackendFeedback(request, 'scratchpad', characterContext, feedbackStyle)
       ]);
       
-      // NEW: Check for cancellation after backend calls
+      // Check for cancellation after backend calls
       if (request.abortSignal?.aborted) {
         throw new Error('Request cancelled after backend processing');
       }
@@ -86,7 +218,7 @@ class AIFeedbackService {
       return { feedback };
       
     } catch (error: any) {
-      // NEW: Handle cancellation
+      // Handle cancellation
       if (request.abortSignal?.aborted || error.message?.includes('cancelled')) {
         console.log('🛑 AI feedback generation was cancelled');
         throw new Error('Feedback generation cancelled by user');
@@ -98,26 +230,139 @@ class AIFeedbackService {
   }
 
   /**
-   * PRESERVED: Generate blended feedback using backend API
-   * ENHANCED: Now with cancellation support
+   * NEW: Token-aware blended feedback generation
+   * ENHANCED: Preserves original functionality + adds token validation
    */
-  async generateBlendedFeedback(
+  async generateBlendedFeedback(request: BlendedFeedbackRequest): Promise<TokenAwareAIFeedbackResponse> {
+    const { userId, scene, mentors, mentorWeights, characters, actionType = 'blended_feedback', scriptId, sceneId, abortSignal } = request;
+    
+    console.log('🎭 AI Service generating blended feedback with token validation + cancellation support:', {
+      userId,
+      mentorCount: mentors.length,
+      sceneLength: scene.content.length,
+      actionType,
+      canCancel: !!abortSignal
+    });
+
+    // Create a blended mentor for the request
+    const blendedMentor: Mentor = {
+      id: 'blended',
+      name: 'Blended Mentoring',
+      tone: 'collaborative',
+      styleNotes: 'Multiple perspectives combined',
+      avatar: '🎭',
+      accent: 'multi-voice',
+      mantra: 'Multiple perspectives reveal the full picture.',
+      feedbackStyle: 'analytical',
+      priorities: ['comprehensive analysis', 'diverse viewpoints'],
+      analysisApproach: 'multi-perspective'
+    };
+
+    try {
+      // Check for cancellation before token validation
+      if (abortSignal?.aborted) {
+        throw new Error('Blended feedback generation cancelled before processing');
+      }
+
+      // Token validation and deduction
+      const tokenResult = await tokenService.processTokenTransaction(
+        userId,
+        actionType,
+        scriptId || scene.id,
+        'blended',
+        sceneId || scene.id
+      );
+
+      if (!tokenResult.success) {
+        const errorMessage = tokenResult.validation.hasEnoughTokens 
+          ? 'Token deduction failed due to system error'
+          : `Insufficient tokens for blended feedback. Need ${tokenResult.validation.requiredTokens}, have ${tokenResult.validation.currentBalance}`;
+        
+        return {
+          success: false,
+          error: errorMessage,
+          feedback: this.createEmptyFeedback(scene, blendedMentor),
+          tokenInfo: {
+            tokensUsed: 0,
+            remainingBalance: tokenResult.validation.currentBalance,
+            action: actionType
+          }
+        };
+      }
+
+      // Check for cancellation after token processing
+      if (abortSignal?.aborted) {
+        throw new Error('Blended feedback generation cancelled after token processing');
+      }
+
+      // Perform original blended feedback generation
+      const feedbackResult = await this.performOriginalBlendedFeedback(
+        scene, mentors, mentorWeights, characters, abortSignal
+      );
+      
+      return {
+        success: true,
+        feedback: feedbackResult.feedback,
+        rewrite: feedbackResult.rewrite,
+        data: feedbackResult.feedback,
+        tokenInfo: {
+          tokensUsed: tokenService.getTokenCost(actionType),
+          remainingBalance: tokenResult.validation.currentBalance,
+          action: actionType
+        }
+      };
+
+    } catch (error: any) {
+      console.error('❌ Blended feedback generation failed:', error);
+      
+      // Handle cancellation vs other errors
+      if (abortSignal?.aborted || error.message?.includes('cancelled')) {
+        return {
+          success: false,
+          error: 'Blended feedback generation cancelled by user',
+          feedback: this.createEmptyFeedback(scene, blendedMentor),
+          tokenInfo: {
+            tokensUsed: 0,
+            remainingBalance: 0,
+            action: actionType
+          }
+        };
+      }
+      
+      return {
+        success: false,
+        error: `Blended feedback generation failed: ${error.message}`,
+        feedback: this.createEmptyFeedback(scene, blendedMentor),
+        tokenInfo: {
+          tokensUsed: tokenService.getTokenCost(actionType),
+          remainingBalance: 0,
+          action: actionType
+        }
+      };
+    }
+  }
+
+  /**
+   * PRESERVED: Original blended feedback generation (without token integration)
+   * Used internally after token validation
+   */
+  private async performOriginalBlendedFeedback(
     scene: ScriptScene,
     mentors: Mentor[],
     mentorWeights: Record<string, number>,
     characters: Record<string, Character>,
-    abortSignal?: AbortSignal // NEW: Add abort signal parameter
+    abortSignal?: AbortSignal
   ): Promise<AIFeedbackResponse> {
-    console.log('🎭 AI Service generating blended feedback with cancellation support:', {
+    console.log('🎭 Performing original blended feedback generation:', {
       mentors: mentors.map(m => m.name),
       sceneLength: scene.content.length,
       characterCount: Object.keys(characters).length,
       weights: mentorWeights,
-      canCancel: !!abortSignal // NEW: Log cancellation capability
+      canCancel: !!abortSignal
     });
 
     try {
-      // NEW: Check for cancellation before starting
+      // Check for cancellation before starting
       if (abortSignal?.aborted) {
         throw new Error('Blended feedback generation cancelled before processing');
       }
@@ -139,7 +384,7 @@ class AIFeedbackService {
         analysisApproach: 'Combines insights from multiple mentoring perspectives'
       };
 
-      // NEW: Check for cancellation before processing
+      // Check for cancellation before processing
       if (abortSignal?.aborted) {
         throw new Error('Blended feedback generation cancelled before backend processing');
       }
@@ -149,7 +394,7 @@ class AIFeedbackService {
         scene,
         mentor: blendedMentor,
         characters,
-        abortSignal // NEW: Pass abort signal
+        abortSignal
       };
 
       const [structuredContent, scratchpadContent] = await Promise.all([
@@ -157,7 +402,7 @@ class AIFeedbackService {
         this.generateBlendedBackendFeedback(blendedRequest, 'scratchpad', characterContext, mentors, mentorWeights)
       ]);
 
-      // NEW: Check for cancellation after backend processing
+      // Check for cancellation after backend processing
       if (abortSignal?.aborted) {
         throw new Error('Blended feedback generation cancelled after backend processing');
       }
@@ -172,7 +417,7 @@ class AIFeedbackService {
       return { feedback };
 
     } catch (error: any) {
-      // NEW: Handle cancellation
+      // Handle cancellation
       if (abortSignal?.aborted || error.message?.includes('cancelled')) {
         console.log('🛑 Blended feedback generation was cancelled');
         throw new Error('Blended feedback generation cancelled by user');
@@ -184,29 +429,50 @@ class AIFeedbackService {
   }
   
   /**
-   * PRESERVED: Generate single feedback mode using backend API (for legacy compatibility)
-   * ENHANCED: Now with cancellation support
+   * PRESERVED: Legacy single feedback method with cancellation support
+   * NEW: Now supports token-aware requests when userId is provided
    */
-  async generateFeedback(request: AIFeedbackRequest & { mode?: 'structured' | 'scratchpad' }): Promise<AIFeedbackResponse> {
-    console.log('🔄 Legacy single feedback mode requested, redirecting to dual feedback with cancellation support');
+  async generateFeedback(request: (AIFeedbackRequest | TokenAwareAIFeedbackRequest) & { mode?: 'structured' | 'scratchpad' }): Promise<AIFeedbackResponse | TokenAwareAIFeedbackResponse> {
+    console.log('🔄 Legacy single feedback mode requested');
     
     try {
-      // NEW: Check for cancellation
+      // Check for cancellation
       if (request.abortSignal?.aborted) {
         throw new Error('Legacy feedback generation cancelled');
       }
 
-      // Always generate dual feedback, then extract the requested mode
-      const dualResponse = await this.generateDualFeedback(request);
-      
-      // If specific mode requested, prioritize that content
-      if (request.mode === 'scratchpad') {
-        dualResponse.feedback.content = dualResponse.feedback.scratchpadContent;
+      // Check if this is a token-aware request
+      if ('userId' in request && request.userId) {
+        console.log('🔄 Legacy request with token awareness, redirecting to token-aware dual feedback');
+        const tokenAwareRequest = request as TokenAwareAIFeedbackRequest;
+        
+        // Always generate dual feedback, then extract the requested mode
+        const dualResponse = await this.generateDualFeedback(tokenAwareRequest);
+        
+        // If specific mode requested, prioritize that content
+        if (request.mode === 'scratchpad') {
+          dualResponse.feedback.content = dualResponse.feedback.scratchpadContent;
+        } else {
+          dualResponse.feedback.content = dualResponse.feedback.structuredContent;
+        }
+        
+        return dualResponse;
       } else {
-        dualResponse.feedback.content = dualResponse.feedback.structuredContent;
+        console.log('🔄 Legacy request without tokens, using original dual feedback');
+        const originalRequest = request as AIFeedbackRequest;
+        
+        // Use original dual feedback generation
+        const dualResponse = await this.performOriginalDualFeedback(originalRequest);
+        
+        // If specific mode requested, prioritize that content
+        if (request.mode === 'scratchpad') {
+          dualResponse.feedback.content = dualResponse.feedback.scratchpadContent;
+        } else {
+          dualResponse.feedback.content = dualResponse.feedback.structuredContent;
+        }
+        
+        return dualResponse;
       }
-      
-      return dualResponse;
     } catch (error: any) {
       if (request.abortSignal?.aborted || error.message?.includes('cancelled')) {
         throw new Error('Legacy feedback generation cancelled by user');
@@ -216,8 +482,130 @@ class AIFeedbackService {
   }
 
   /**
+   * PRESERVED: Generate script rewrite with cancellation support
+   * NEW: Added token support when userId is provided
+   */
+  async generateScriptRewrite(
+    scene: ScriptScene,
+    feedback: Feedback,
+    abortSignal?: AbortSignal,
+    userId?: string
+  ): Promise<ScriptRewrite | TokenAwareResponse<ScriptRewrite>> {
+    console.log('✍️ Generating script rewrite with cancellation support...');
+
+    try {
+      // Check for cancellation before starting
+      if (abortSignal?.aborted) {
+        throw new Error('Script rewrite generation cancelled');
+      }
+
+      // If userId provided, handle token validation
+      if (userId) {
+        const tokenResult = await tokenService.processTokenTransaction(
+          userId,
+          'rewrite_suggestions',
+          scene.id,
+          feedback.mentorId,
+          scene.id
+        );
+
+        if (!tokenResult.success) {
+          const errorMessage = tokenResult.validation.hasEnoughTokens 
+            ? 'Token deduction failed due to system error'
+            : `Insufficient tokens for script rewrite. Need ${tokenResult.validation.requiredTokens}, have ${tokenResult.validation.currentBalance}`;
+          
+          return {
+            success: false,
+            error: errorMessage,
+            tokenInfo: {
+              tokensUsed: 0,
+              remainingBalance: tokenResult.validation.currentBalance,
+              action: 'rewrite_suggestions'
+            }
+          };
+        }
+      }
+
+      // Simulate rewrite generation with cancellation checks
+      const checkpoints = [25, 50, 75, 100];
+      
+      for (const checkpoint of checkpoints) {
+        if (abortSignal?.aborted) {
+          throw new Error('Script rewrite generation cancelled');
+        }
+        
+        // Simulate processing time
+        await new Promise(resolve => setTimeout(resolve, 500));
+        console.log(`✍️ Rewrite progress: ${checkpoint}%`);
+      }
+
+      // Generate the rewrite (this would use the backend in real implementation)
+      const rewrite: ScriptRewrite = {
+        id: `rewrite_${Date.now()}`,
+        content: scene.content, // In real implementation, this would be the rewritten content
+        changes: [
+          'Tightened dialogue for better pacing',
+          'Added visual action beats',
+          'Enhanced character subtext'
+        ],
+        reasoning: 'Rewrite focuses on improving dialogue efficiency and visual storytelling based on mentor feedback.'
+      };
+
+      console.log('✅ Script rewrite generation completed');
+      
+      if (userId) {
+        return {
+          success: true,
+          data: rewrite,
+          tokenInfo: {
+            tokensUsed: tokenService.getTokenCost('rewrite_suggestions'),
+            remainingBalance: 0, // Would need to fetch updated balance
+            action: 'rewrite_suggestions'
+          }
+        };
+      }
+      
+      return rewrite;
+
+    } catch (error: any) {
+      if (abortSignal?.aborted || error.message?.includes('cancelled')) {
+        console.log('🛑 Script rewrite generation was cancelled');
+        
+        if (userId) {
+          return {
+            success: false,
+            error: 'Script rewrite generation cancelled by user',
+            tokenInfo: {
+              tokensUsed: 0,
+              remainingBalance: 0,
+              action: 'rewrite_suggestions'
+            }
+          };
+        }
+        
+        throw new Error('Script rewrite generation cancelled by user');
+      }
+      
+      console.error('❌ Script rewrite generation failed:', error);
+      
+      if (userId) {
+        return {
+          success: false,
+          error: `Script rewrite generation failed: ${error.message}`,
+          tokenInfo: {
+            tokensUsed: tokenService.getTokenCost('rewrite_suggestions'),
+            remainingBalance: 0,
+            action: 'rewrite_suggestions'
+          }
+        };
+      }
+      
+      throw error;
+    }
+  }
+
+  /**
    * PRESERVED: Generate feedback using backend API for standard mentors
-   * ENHANCED: Now with cancellation support
    */
   private async generateBackendFeedback(
     request: AIFeedbackRequest, 
@@ -228,7 +616,7 @@ class AIFeedbackService {
     try {
       console.log(`🚀 Generating ${mode} feedback via backend API for ${request.mentor.name} with cancellation support`);
       
-      // NEW: Check for cancellation before backend call
+      // Check for cancellation before backend call
       if (request.abortSignal?.aborted) {
         throw new Error(`${mode} feedback generation cancelled`);
       }
@@ -240,11 +628,11 @@ class AIFeedbackService {
         feedback_mode: mode,
         system_prompt: feedbackStyle.systemPrompt,
         temperature: feedbackStyle.temperature
-      }, request.abortSignal); // NEW: Pass abort signal to backend service
+      }, request.abortSignal);
       
       return this.cleanFeedbackContent(feedbackContent, mode, request.mentor);
     } catch (error: any) {
-      // NEW: Handle cancellation
+      // Handle cancellation
       if (request.abortSignal?.aborted || error.message?.includes('cancelled')) {
         throw new Error(`${mode} feedback generation cancelled`);
       }
@@ -256,7 +644,6 @@ class AIFeedbackService {
 
   /**
    * PRESERVED: Generate blended feedback using backend API with special blended processing
-   * ENHANCED: Now with cancellation support
    */
   private async generateBlendedBackendFeedback(
     request: AIFeedbackRequest,
@@ -268,7 +655,7 @@ class AIFeedbackService {
     try {
       console.log(`🎭 Generating blended ${mode} feedback via backend API with cancellation support`);
       
-      // NEW: Check for cancellation before processing
+      // Check for cancellation before processing
       if (request.abortSignal?.aborted) {
         throw new Error(`Blended ${mode} feedback generation cancelled`);
       }
@@ -283,11 +670,11 @@ class AIFeedbackService {
         feedback_mode: mode,
         system_prompt: blendedSystemPrompt,
         temperature: 0.7 // Balanced temperature for blended feedback
-      }, request.abortSignal); // NEW: Pass abort signal to backend service
+      }, request.abortSignal);
       
       return this.cleanBlendedFeedbackContent(feedbackContent, mode, mentors);
     } catch (error: any) {
-      // NEW: Handle cancellation
+      // Handle cancellation
       if (request.abortSignal?.aborted || error.message?.includes('cancelled')) {
         throw new Error(`Blended ${mode} feedback generation cancelled`);
       }
@@ -628,58 +1015,59 @@ ${mode === 'scratchpad' ?
   }
 
   /**
-   * NEW: Generate script rewrite with cancellation support
+   * NEW: Create empty feedback for error cases
    */
-  async generateScriptRewrite(
-    scene: ScriptScene,
-    feedback: Feedback,
-    abortSignal?: AbortSignal
-  ): Promise<ScriptRewrite> {
-    console.log('✍️ Generating script rewrite with cancellation support...');
+  private createEmptyFeedback(scene: ScriptScene, mentor: Mentor): Feedback {
+    return {
+      id: `error_feedback_${Date.now()}`,
+      mentorId: mentor.id,
+      sceneId: scene.id,
+      structuredContent: 'Feedback generation failed. Please try again.',
+      scratchpadContent: 'Unable to generate feedback at this time.',
+      timestamp: new Date(),
+      categories: {
+        structure: 'Error',
+        dialogue: 'Error', 
+        pacing: 'Error',
+        theme: 'Error'
+      }
+    };
+  }
 
+  /**
+   * NEW: Public validation methods for token checking
+   */
+  async validateTokensForFeedback(userId: string, actionType: 'single_feedback' | 'blended_feedback'): Promise<{
+    canProceed: boolean;
+    cost: number;
+    currentBalance: number;
+    shortfall?: number;
+  }> {
     try {
-      // Check for cancellation before starting
-      if (abortSignal?.aborted) {
-        throw new Error('Script rewrite generation cancelled');
-      }
-
-      // Simulate rewrite generation with cancellation checks
-      const checkpoints = [25, 50, 75, 100];
+      const cost = tokenService.getTokenCost(actionType);
+      const validation = await tokenService.validateTokenBalance(userId, cost);
       
-      for (const checkpoint of checkpoints) {
-        if (abortSignal?.aborted) {
-          throw new Error('Script rewrite generation cancelled');
-        }
-        
-        // Simulate processing time
-        await new Promise(resolve => setTimeout(resolve, 500));
-        console.log(`✍️ Rewrite progress: ${checkpoint}%`);
-      }
-
-      // Generate the rewrite (this would use the backend in real implementation)
-      const rewrite: ScriptRewrite = {
-        id: `rewrite_${Date.now()}`,
-        content: scene.content, // In real implementation, this would be the rewritten content
-        changes: [
-          'Tightened dialogue for better pacing',
-          'Added visual action beats',
-          'Enhanced character subtext'
-        ],
-        reasoning: 'Rewrite focuses on improving dialogue efficiency and visual storytelling based on mentor feedback.'
+      return {
+        canProceed: validation.hasEnoughTokens,
+        cost,
+        currentBalance: validation.currentBalance,
+        shortfall: validation.shortfall
       };
-
-      console.log('✅ Script rewrite generation completed');
-      return rewrite;
-
-    } catch (error: any) {
-      if (abortSignal?.aborted || error.message?.includes('cancelled')) {
-        console.log('🛑 Script rewrite generation was cancelled');
-        throw new Error('Script rewrite generation cancelled by user');
-      }
-      
-      console.error('❌ Script rewrite generation failed:', error);
-      throw error;
+    } catch (error) {
+      console.error('Error validating tokens for feedback:', error);
+      return {
+        canProceed: false,
+        cost: tokenService.getTokenCost(actionType),
+        currentBalance: 0
+      };
     }
+  }
+
+  /**
+   * NEW: Get token cost for feedback type
+   */
+  getTokenCost(actionType: 'single_feedback' | 'blended_feedback'): number {
+    return tokenService.getTokenCost(actionType);
   }
 }
 

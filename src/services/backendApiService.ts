@@ -1,6 +1,7 @@
-// src/services/backendApiService.ts - Complete enhanced version with cancellation support
-import { Feedback } from '../types';
+// src/services/backendApiService.ts - Complete enhanced version with token integration + ALL original features
+import { TokenUsage } from '../types';
 
+// PRESERVED: Original interfaces
 interface BackendFeedbackRequest {
   scene_content: string;
   mentor_id: string;
@@ -8,6 +9,7 @@ interface BackendFeedbackRequest {
   feedback_mode: 'structured' | 'scratchpad';
   system_prompt: string;
   temperature: number;
+  // NEW: Optional formatting instructions will be added automatically
 }
 
 interface BackendFeedbackResponse {
@@ -19,23 +21,44 @@ interface BackendFeedbackResponse {
   error?: string;
 }
 
+// NEW: Enhanced interfaces for token-aware requests
+interface TokenAwareApiResponse<T = any> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
+  timestamp?: string;
+}
+
+interface TokenAwareRequest {
+  userId?: string;
+  actionType?: TokenUsage['action_type'];
+}
+
 class BackendApiService {
   private baseUrl: string;
-  private activeRequests: Map<string, AbortController> = new Map(); // NEW: Request tracking
+  private activeRequests: Map<string, AbortController> = new Map(); // PRESERVED: Request tracking
+  private healthCheckCache: { isHealthy: boolean; lastChecked: number } | null = null; // NEW: Health check caching
+  private readonly HEALTH_CHECK_CACHE_DURATION = 30000; // 30 seconds
 
   constructor() {
     this.baseUrl = 'https://smbackend-production.up.railway.app/api';
   }
 
   /**
-   * Generate feedback with optional cancellation support
+   * PRESERVED: Generate feedback with optional cancellation support
    * ENHANCED: Now supports AbortSignal while preserving all original functionality
    */
   async generateFeedback(
     request: BackendFeedbackRequest, 
-    abortSignal?: AbortSignal // NEW: Optional abort signal
+    abortSignal?: AbortSignal // PRESERVED: Optional abort signal
   ): Promise<string> {
     try {
+      // PRESERVED: Add formatting instructions to request
       const enhancedRequest = {
         ...request,
         formatting_instructions: this.getFormattingInstructions(request.feedback_mode)
@@ -45,14 +68,14 @@ class BackendApiService {
         mentor_id: request.mentor_id,
         mode: request.feedback_mode,
         scene_length: request.scene_content.length,
-        canCancel: !!abortSignal // NEW: Log cancellation capability
+        canCancel: !!abortSignal // PRESERVED: Log cancellation capability
       });
 
-      // NEW: Create abort controller if signal provided
+      // PRESERVED: Create abort controller if signal provided
       const controller = new AbortController();
       const requestId = `${request.mentor_id}-${Date.now()}`;
       
-      // NEW: Store controller for potential cancellation
+      // PRESERVED: Store controller for potential cancellation
       if (abortSignal) {
         this.activeRequests.set(requestId, controller);
         
@@ -70,10 +93,10 @@ class BackendApiService {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(enhancedRequest),
-        signal: controller.signal // NEW: Add abort signal to fetch
+        signal: controller.signal // PRESERVED: Add abort signal to fetch
       });
 
-      // NEW: Clean up request tracking
+      // PRESERVED: Clean up request tracking
       this.activeRequests.delete(requestId);
 
       if (!response.ok) {
@@ -91,7 +114,7 @@ class BackendApiService {
       return data.feedback;
 
     } catch (error) {
-      // NEW: Handle abort errors specifically
+      // PRESERVED: Handle abort errors specifically
       if (error instanceof Error && error.name === 'AbortError') {
         console.log('🛑 Backend request was cancelled');
         throw new Error('Request cancelled by user');
@@ -169,11 +192,19 @@ EXAMPLE FORMAT:
   }
 
   /**
-   * PRESERVED: Original health check method with enhanced cancellation support
+   * ENHANCED: Health check with caching and cancellation support
    */
   async healthCheck(): Promise<boolean> {
+    const now = Date.now();
+    
+    // Return cached result if still valid
+    if (this.healthCheckCache && 
+        (now - this.healthCheckCache.lastChecked) < this.HEALTH_CHECK_CACHE_DURATION) {
+      return this.healthCheckCache.isHealthy;
+    }
+
     try {
-      // NEW: Add timeout to prevent hanging
+      // PRESERVED: Add timeout to prevent hanging
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
       
@@ -182,12 +213,18 @@ EXAMPLE FORMAT:
         headers: {
           'Content-Type': 'application/json',
         },
-        signal: controller.signal // NEW: Add abort signal
+        signal: controller.signal // PRESERVED: Add abort signal
       });
       
       clearTimeout(timeoutId);
       const isHealthy = response.ok;
       
+      // NEW: Cache the result
+      this.healthCheckCache = {
+        isHealthy,
+        lastChecked: now
+      };
+
       if (isHealthy) {
         const data = await response.json();
         console.log('💚 Backend health check passed:', data);
@@ -200,6 +237,13 @@ EXAMPLE FORMAT:
       } else {
         console.warn('🔴 Backend health check failed:', error);
       }
+      
+      // NEW: Cache the failure
+      this.healthCheckCache = {
+        isHealthy: false,
+        lastChecked: now
+      };
+      
       return false;
     }
   }
@@ -211,7 +255,7 @@ EXAMPLE FORMAT:
     try {
       console.log('🔍 Testing backend connection...');
       
-      // NEW: Add timeout for connection test
+      // PRESERVED: Add timeout for connection test
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
       
@@ -287,7 +331,182 @@ Come on... just write something.`,
   }
 
   /**
-   * NEW: Cancel all active requests
+   * NEW: Enhanced request method for token-aware operations
+   */
+  async makeRequest<T = any>(
+    endpoint: string, 
+    options: RequestInit = {},
+    tokenInfo?: { userId: string; actionType: TokenUsage['action_type'] }
+  ): Promise<TokenAwareApiResponse<T>> {
+    const url = `${this.baseUrl}${endpoint}`;
+    
+    const defaultHeaders = {
+      'Content-Type': 'application/json',
+      'User-Agent': 'ScriptMentor/2.0',
+    };
+
+    // Add token context headers if provided
+    const headers = tokenInfo ? {
+      ...defaultHeaders,
+      'X-User-ID': tokenInfo.userId,
+      'X-Action-Type': tokenInfo.actionType,
+      ...options.headers
+    } : {
+      ...defaultHeaders,
+      ...options.headers
+    };
+
+    const requestOptions: RequestInit = {
+      ...options,
+      headers,
+      // Default timeout of 60 seconds for AI operations
+      signal: options.signal || AbortSignal.timeout(60000)
+    };
+
+    try {
+      console.log(`🌐 Making API request to ${endpoint}`, {
+        method: requestOptions.method || 'GET',
+        hasBody: !!requestOptions.body,
+        hasTokenInfo: !!tokenInfo
+      });
+
+      const response = await fetch(url, requestOptions);
+      
+      if (!response.ok) {
+        let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+        
+        try {
+          const errorBody = await response.text();
+          if (errorBody) {
+            const errorData = JSON.parse(errorBody);
+            errorMessage = errorData.error || errorMessage;
+          }
+        } catch {
+          // If we can't parse the error body, use the default message
+        }
+        
+        throw new Error(errorMessage);
+      }
+
+      const data = await response.json();
+      
+      console.log(`✅ API request successful`, {
+        endpoint,
+        hasData: !!data,
+        hasUsage: !!data.usage
+      });
+
+      return {
+        success: true,
+        data: data.data || data,
+        usage: data.usage,
+        timestamp: data.timestamp || new Date().toISOString()
+      };
+
+    } catch (error) {
+      console.error(`❌ API request failed for ${endpoint}:`, error);
+      
+      if (error instanceof Error) {
+        if (error.name === 'AbortError') {
+          return {
+            success: false,
+            error: 'Request was cancelled or timed out'
+          };
+        }
+        
+        return {
+          success: false,
+          error: error.message
+        };
+      }
+
+      return {
+        success: false,
+        error: 'Unknown error occurred'
+      };
+    }
+  }
+
+  /**
+   * NEW: Generate dual feedback via backend API
+   */
+  async generateDualFeedback(
+    scene: any,
+    mentor: any,
+    characters: any,
+    tokenInfo?: { userId: string; actionType: TokenUsage['action_type'] }
+  ): Promise<TokenAwareApiResponse<any>> {
+    return this.makeRequest('/feedback/dual', {
+      method: 'POST',
+      body: JSON.stringify({
+        scene,
+        mentor,
+        characters,
+        modes: ['structured', 'scratchpad']
+      })
+    }, tokenInfo);
+  }
+
+  /**
+   * NEW: Generate blended feedback via backend API
+   */
+  async generateBlendedFeedback(
+    scene: any,
+    mentors: any[],
+    mentorWeights: Record<string, number>,
+    characters: any,
+    tokenInfo?: { userId: string; actionType: TokenUsage['action_type'] }
+  ): Promise<TokenAwareApiResponse<any>> {
+    return this.makeRequest('/feedback/blended', {
+      method: 'POST',
+      body: JSON.stringify({
+        scene,
+        mentors,
+        mentorWeights,
+        characters,
+        modes: ['structured', 'scratchpad']
+      })
+    }, tokenInfo);
+  }
+
+  /**
+   * NEW: Generate rewrite suggestions via backend API
+   */
+  async generateRewriteSuggestions(
+    scene: any,
+    mentor: any,
+    characters: any,
+    tokenInfo?: { userId: string; actionType: TokenUsage['action_type'] }
+  ): Promise<TokenAwareApiResponse<any>> {
+    return this.makeRequest('/rewrite/suggestions', {
+      method: 'POST',
+      body: JSON.stringify({
+        scene,
+        mentor,
+        characters
+      })
+    }, tokenInfo);
+  }
+
+  /**
+   * NEW: Generate writer agent analysis via backend API
+   */
+  async generateWriterAgent(
+    feedbackText: string,
+    mentorId: string,
+    tokenInfo?: { userId: string; actionType: TokenUsage['action_type'] }
+  ): Promise<TokenAwareApiResponse<any>> {
+    return this.makeRequest('/writer-agent', {
+      method: 'POST',
+      body: JSON.stringify({
+        feedback_text: feedbackText,
+        mentor_id: mentorId
+      })
+    }, tokenInfo);
+  }
+
+  /**
+   * PRESERVED: Cancel all active requests
    */
   cancelAllRequests(): void {
     console.log(`🛑 Cancelling ${this.activeRequests.size} active backend requests`);
@@ -301,14 +520,14 @@ Come on... just write something.`,
   }
 
   /**
-   * NEW: Get count of active requests
+   * PRESERVED: Get count of active requests
    */
   getActiveRequestCount(): number {
     return this.activeRequests.size;
   }
 
   /**
-   * NEW: Cancel a specific request by ID
+   * PRESERVED: Cancel a specific request by ID
    */
   cancelRequest(requestId: string): boolean {
     const controller = this.activeRequests.get(requestId);
@@ -322,17 +541,140 @@ Come on... just write something.`,
   }
 
   /**
-   * NEW: Get list of active request IDs
+   * PRESERVED: Get list of active request IDs
    */
   getActiveRequestIds(): string[] {
     return Array.from(this.activeRequests.keys());
   }
 
   /**
-   * NEW: Check if a specific request is active
+   * PRESERVED: Check if a specific request is active
    */
   isRequestActive(requestId: string): boolean {
     return this.activeRequests.has(requestId);
+  }
+
+  /**
+   * NEW: Enhanced script analysis via backend API
+   */
+  async generateEnhancedAnalysis(
+    scene: any,
+    mentor: any,
+    characters: any,
+    tokenInfo?: { userId: string; actionType: TokenUsage['action_type'] }
+  ): Promise<TokenAwareApiResponse<any>> {
+    return this.makeRequest('/feedback/enhanced', {
+      method: 'POST',
+      body: JSON.stringify({
+        scene,
+        mentor,
+        characters,
+        analysis_type: 'comprehensive'
+      })
+    }, tokenInfo);
+  }
+
+  /**
+   * NEW: Batch feedback generation for multiple scenes/chunks
+   */
+  async generateBatchFeedback(
+    requests: Array<{
+      scene: any;
+      mentor: any;
+      characters: any;
+    }>,
+    tokenInfo?: { userId: string; actionType: TokenUsage['action_type'] }
+  ): Promise<TokenAwareApiResponse<any[]>> {
+    return this.makeRequest('/feedback/batch', {
+      method: 'POST',
+      body: JSON.stringify({
+        requests,
+        modes: ['structured', 'scratchpad']
+      })
+    }, tokenInfo);
+  }
+
+  /**
+   * NEW: Get backend API usage statistics
+   */
+  async getApiUsageStats(userId: string): Promise<TokenAwareApiResponse<{
+    totalRequests: number;
+    requestsByType: Record<string, number>;
+    averageResponseTime: number;
+    lastRequestTime: string;
+  }>> {
+    return this.makeRequest(`/usage/stats/${userId}`, {
+      method: 'GET'
+    });
+  }
+
+  /**
+   * NEW: Validate backend API key/authentication
+   */
+  async validateAuthentication(): Promise<TokenAwareApiResponse<{ isValid: boolean; expiresAt?: string }>> {
+    return this.makeRequest('/auth/validate', {
+      method: 'POST'
+    });
+  }
+
+  /**
+   * NEW: Get current backend API status and capabilities
+   */
+  async getApiStatus(): Promise<TokenAwareApiResponse<{
+    status: 'healthy' | 'degraded' | 'unhealthy';
+    version: string;
+    capabilities: string[];
+    limitations: Record<string, any>;
+  }>> {
+    return this.makeRequest('/status', {
+      method: 'GET'
+    });
+  }
+
+  /**
+   * NEW: Test connectivity and measure response time
+   */
+  async testConnectivity(): Promise<{
+    isConnected: boolean;
+    responseTime: number;
+    error?: string;
+  }> {
+    const startTime = Date.now();
+    
+    try {
+      const isHealthy = await this.healthCheck();
+      const responseTime = Date.now() - startTime;
+      
+      return {
+        isConnected: isHealthy,
+        responseTime
+      };
+    } catch (error) {
+      const responseTime = Date.now() - startTime;
+      
+      return {
+        isConnected: false,
+        responseTime,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+
+  /**
+   * NEW: Get the base URL for the backend API
+   */
+  getBaseUrl(): string {
+    return this.baseUrl;
+  }
+
+  /**
+   * NEW: Set a custom base URL (useful for testing or environment switching)
+   */
+  setBaseUrl(url: string): void {
+    this.baseUrl = url;
+    // Clear health check cache when URL changes
+    this.healthCheckCache = null;
+    console.log(`🔗 Backend API URL updated to: ${url}`);
   }
 }
 

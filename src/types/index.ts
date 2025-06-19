@@ -1,4 +1,4 @@
-// src/types/index.ts
+// src/types/index.ts - Updated with token integration
 export interface Mentor {
   id: string;
   name: string;
@@ -128,8 +128,6 @@ export interface RewriteSuggestionsApiResponse {
   timestamp: string;
   error?: string;
 }
-// ADD these new interfaces to your existing src/types/index.ts file
-// (Keep everything you already have, just add these at the end)
 
 // NEW: Chunked script support
 export interface ScriptChunk {
@@ -185,134 +183,205 @@ export interface FullScript {
   chunkingStrategy: 'pages' | 'acts' | 'sequences';
   lastAnalyzed?: Date;
 }
-/* Additional CSS to prevent library button flickering and improve UX */
 
-/* Smooth fade-in animation for content switching */
-.fade-in {
-  animation: fadeIn 0.3s ease-in-out;
+// ===== TOKEN SYSTEM TYPES =====
+
+export interface UserTokens {
+  user_id: string;
+  balance: number;
+  monthly_allowance: number;
+  tier: 'free' | 'creator' | 'pro';
+  last_reset_date: string;
+  created_at: string;
+  updated_at: string;
 }
 
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
+export interface TokenUsage {
+  id: string;
+  user_id: string;
+  tokens_used: number;
+  action_type: 'single_feedback' | 'blended_feedback' | 'chunked_feedback' | 'rewrite_suggestions' | 'writer_agent';
+  script_id?: string;
+  mentor_id?: string;
+  scene_id?: string;
+  created_at: string;
+}
+
+export interface TokenTransaction {
+  id: string;
+  user_id: string;
+  tokens_added: number;
+  transaction_type: 'subscription_grant' | 'monthly_reset' | 'one_time_purchase' | 'bonus_grant' | 'admin_adjustment';
+  stripe_payment_id?: string;
+  stripe_subscription_id?: string;
+  description?: string;
+  created_at: string;
+}
+
+export interface TokenCosts {
+  single_feedback: number;
+  blended_feedback: number;
+  chunked_feedback: number;
+  rewrite_suggestions: number;
+  writer_agent: number;
+}
+
+export interface TierLimits {
+  free: {
+    tokens: number;
+    features: string[];
+    restrictions: string[];
+  };
+  creator: {
+    tokens: number;
+    features: string[];
+    restrictions: string[];
+  };
+  pro: {
+    tokens: number;
+    features: string[];
+    restrictions: string[];
+  };
+}
+
+export interface TokenDeductionRequest {
+  userId: string;
+  tokensToDeduct: number;
+  actionType: TokenUsage['action_type'];
+  scriptId?: string;
+  mentorId?: string;
+  sceneId?: string;
+}
+
+export interface TokenAllocationRequest {
+  userId: string;
+  tokensToAdd: number;
+  transactionType: TokenTransaction['transaction_type'];
+  stripePaymentId?: string;
+  stripeSubscriptionId?: string;
+  description?: string;
+}
+
+export interface TokenValidationResult {
+  hasEnoughTokens: boolean;
+  currentBalance: number;
+  requiredTokens: number;
+  shortfall?: number;
+  tier: UserTokens['tier'];
+}
+
+export interface TokenUsageStats {
+  totalUsed: number;
+  usageByAction: Record<TokenUsage['action_type'], number>;
+  usageThisMonth: number;
+  averageDaily: number;
+  daysUntilReset: number;
+}
+
+// Constants that should match the database and webhook
+export const TOKEN_COSTS: TokenCosts = {
+  single_feedback: 5,
+  blended_feedback: 15,
+  chunked_feedback: 25,
+  rewrite_suggestions: 10,
+  writer_agent: 8,
+} as const;
+
+export const TIER_LIMITS: TierLimits = {
+  free: {
+    tokens: 50,
+    features: [
+      'Single mentor feedback',
+      'Basic script analysis',
+      'Community support'
+    ],
+    restrictions: [
+      'No blended feedback',
+      'No writer agent',
+      'Limited to basic mentors only'
+    ]
+  },
+  creator: {
+    tokens: 500,
+    features: [
+      'All mentor personalities',
+      'Blended feedback mode', 
+      'Writer Agent analysis',
+      'Advanced script insights',
+      'Priority support'
+    ],
+    restrictions: []
+  },
+  pro: {
+    tokens: 1500,
+    features: [
+      'Everything from Creator tier',
+      '30% token discount on purchases',
+      'Unlimited script uploads',
+      'Advanced analytics',
+      'Premium support',
+      'Early access to new features'
+    ],
+    restrictions: []
   }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+} as const;
+
+export const PRICE_ID_TO_TIER: Record<string, UserTokens['tier']> = {
+  'price_1Raly0EOpk1Bj1eeuMuWMJ7Y': 'free',
+  'price_1RalzkEOpk1Bj1eeIqTOsYNq': 'creator', 
+  'price_1Ram1AEOpk1Bj1ee2sRTCp8b': 'pro',
+} as const;
+
+// Helper type guards
+export function isValidTier(tier: string): tier is UserTokens['tier'] {
+  return ['free', 'creator', 'pro'].includes(tier);
 }
 
-/* Enhanced button transitions */
-button {
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
+export function isValidActionType(action: string): action is TokenUsage['action_type'] {
+  return [
+    'single_feedback',
+    'blended_feedback', 
+    'chunked_feedback',
+    'rewrite_suggestions',
+    'writer_agent'
+  ].includes(action);
 }
 
-/* Prevent button text selection and improve click responsiveness */
-button {
-  user-select: none;
-  -webkit-user-select: none;
-  -moz-user-select: none;
-  -ms-user-select: none;
-  cursor: pointer;
+export function isValidTransactionType(type: string): type is TokenTransaction['transaction_type'] {
+  return [
+    'subscription_grant',
+    'monthly_reset',
+    'one_time_purchase', 
+    'bonus_grant',
+    'admin_adjustment'
+  ].includes(type);
 }
 
-/* Better focus states for accessibility */
-button:focus {
-  outline: 2px solid transparent;
-  outline-offset: 2px;
+// Helper functions for token costs
+export function getTokenCostForAction(actionType: TokenUsage['action_type']): number {
+  return TOKEN_COSTS[actionType];
 }
 
-button:focus-visible {
-  outline: 2px solid #fbbf24;
-  outline-offset: 2px;
-  box-shadow: 0 0 0 4px rgba(251, 191, 36, 0.1);
+export function getTierAllowance(tier: UserTokens['tier']): number {
+  return TIER_LIMITS[tier].tokens;
 }
 
-/* Smooth hover effects */
-button:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+// NEW: Token-aware service interfaces
+export interface TokenAwareRequest {
+  userId: string;
+  actionType: TokenUsage['action_type'];
+  scriptId?: string;
+  mentorId?: string;
+  sceneId?: string;
 }
 
-button:active {
-  transform: translateY(0);
-  transition-duration: 0.1s;
+export interface TokenAwareResponse<T = any> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  tokenInfo: {
+    tokensUsed: number;
+    remainingBalance: number;
+    action: TokenUsage['action_type'];
+  };
 }
-
-/* Specific styles for library button to prevent layout shifts */
-.library-button {
-  min-width: 140px;
-  justify-content: center;
-}
-
-/* Smooth icon transitions */
-.library-button svg {
-  transition: transform 0.2s ease-in-out;
-}
-
-.library-button:hover svg {
-  transform: scale(1.1);
-}
-
-/* Prevent content jumps during state changes */
-.main-container {
-  min-height: calc(100vh - 200px);
-  will-change: contents;
-}
-
-/* Loading state improvements */
-.loading-overlay {
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
-}
-
-/* Performance optimizations */
-.script-workspace,
-.script-library {
-  will-change: transform;
-  transform: translateZ(0);
-}
-
-/* Smooth transitions for conditional rendering */
-.content-container {
-  transition: opacity 0.2s ease-in-out;
-}
-
-.content-container.hidden {
-  opacity: 0;
-  pointer-events: none;
-}
-
-/* Fix for potential text rendering issues */
-* {
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-/* Ensure buttons maintain their size during state changes */
-button span {
-  display: inline-block;
-  white-space: nowrap;
-}
-
-/* Improve button responsiveness on touch devices */
-@media (hover: none) and (pointer: coarse) {
-  button:hover {
-    transform: none;
-    box-shadow: none;
-  }
-  
-  button:active {
-    transform: scale(0.98);
-    transition-duration: 0.1s;
-  }
-}
-// UPDATE your existing Feedback interface by adding these two optional properties:
-// (Don't replace it, just add these lines to your current Feedback interface)
-
-// Add these properties to your existing Feedback interface:
-// isChunked?: boolean;
-// chunkedFeedback?: ChunkedScriptFeedback;

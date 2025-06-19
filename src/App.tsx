@@ -1,3 +1,4 @@
+// src/App.tsx - Complete version preserving ALL existing functionality + comprehensive token integration
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from './utils/supabaseClient';
 import { supabaseScriptService } from './services/supabaseScriptService';
@@ -9,9 +10,15 @@ import FeedbackView from './components/FeedbackView';
 import ChunkedFeedbackView from './components/ChunkedFeedbackView';
 import RewriteSuggestions from './components/RewriteSuggestions';
 import ScriptNavigationPanel from './components/ScriptNavigationPanel';
-// REMOVED: ChunkProcessingProgress, LoadingOverlay, ProcessingProgress imports
-// UNIFIED: Only using ProgressiveProcessingProgress for ALL feedback processing
 import ProgressiveProcessingProgress from './components/ProgressiveProcessingProgress';
+// NEW: Token integration components and services
+import { TokenDisplay, TokenValidationGuard, TokenCostPreview } from './components/TokenDisplay';
+import { tokenService } from './services/tokenService';
+import { aiFeedbackService } from './services/aiFeedbackService';
+import { feedbackChunkService } from './services/feedbackChunkService';
+import { writerAgentService } from './services/writerAgentService';
+import { rewriteEvaluationService } from './services/rewriteEvaluationService';
+import { TokenValidationMiddleware } from './utils/tokenValidationMiddleware';
 import { mentors } from './data/mentors';
 import { 
   ScriptScene, 
@@ -20,22 +27,26 @@ import {
   ScriptRewrite,
   FeedbackMode,
   FullScript,
-  ScriptChunk
+  ScriptChunk,
+  // NEW: Token types
+  UserTokens,
+  TokenValidationResult,
+  TOKEN_COSTS,
+  WriterSuggestionsResponse
 } from './types';
 import { CharacterMemoryManager } from './utils/characterMemory';
 import { FeedbackGenerator } from './utils/feedbackGenerator';
 import { ScriptChunker } from './utils/scriptChunker';
-// REMOVED: ChunkProcessingProgress type import - no longer needed
 import { ProcessingProgress as ProgressiveProgressType, progressiveFeedbackService } from './services/progressiveFeedbackService';
 import { backendApiService } from './services/backendApiService';
 import { CharacterDataNormalizer } from './utils/characterDataNormalizer';
-import { BookOpenCheck, Files, Activity, BookText, BookOpen, BookMarked, BarChart3, Sparkles, ArrowDown, LogOut, Layers, FileText, RefreshCw } from 'lucide-react';
+import { BookOpenCheck, Files, Activity, BookText, BookOpen, BookMarked, BarChart3, Sparkles, ArrowDown, LogOut, Layers, FileText, RefreshCw, AlertCircle, Coins, Crown, Zap, TrendingUp } from 'lucide-react';
 import { processSceneText } from './utils/scriptFormatter';
 import ScriptLibrary from './components/ScriptLibrary';
 import RewriteEvaluation from './components/RewriteEvaluation';
 import { enhancedScriptRewriter } from './utils/enhancedScriptRewriter';
 
-// Fixed LibraryButton component - moved outside App component to prevent recreation
+// PRESERVED: Fixed LibraryButton component - moved outside App component to prevent recreation
 const LibraryButton: React.FC<{
   showLibrary: boolean;
   onToggle: () => void;
@@ -51,14 +62,16 @@ const LibraryButton: React.FC<{
 ));
 
 const App: React.FC = () => {
+  // PRESERVED: All existing core state
   const [session, setSession] = useState<any>(null);
   const [selectedMentorId, setSelectedMentorId] = useState<string>('tony-gilroy');
   
-  // Script state - now supports both single scenes and full scripts
+  // PRESERVED: Script state - now supports both single scenes and full scripts
   const [currentScript, setCurrentScript] = useState<FullScript | null>(null);
   const [currentScene, setCurrentScene] = useState<ScriptScene | null>(null);
   const [selectedChunkId, setSelectedChunkId] = useState<string | null>(null);
   
+  // PRESERVED: All feedback and processing state
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [rewrite, setRewrite] = useState<ScriptRewrite | null>(null);
   const [diffLines, setDiffLines] = useState<string[]>([]);
@@ -66,7 +79,7 @@ const App: React.FC = () => {
   const [characters, setCharacters] = useState<Record<string, { name: string, notes: string[] }>>({});
   const [feedbackMode, setFeedbackMode] = useState<FeedbackMode>('structured');
   
-  // SIMPLIFIED LOADING STATES - Removed multiple progress state variables
+  // PRESERVED: SIMPLIFIED LOADING STATES - Removed multiple progress state variables
   const [isLoadingScript, setIsLoadingScript] = useState(false);
   const [isGeneratingFeedback, setIsGeneratingFeedback] = useState(false);
   const [isGeneratingWriterSuggestions, setIsGeneratingWriterSuggestions] = useState(false);
@@ -74,22 +87,30 @@ const App: React.FC = () => {
   const [showWriterSuggestions, setShowWriterSuggestions] = useState(false);
   const [writerSuggestionsStarted, setWriterSuggestionsStarted] = useState(false);
   
-  // UNIFIED PROGRESSIVE PROCESSING STATE - Single state for ALL feedback types
+  // PRESERVED: UNIFIED PROGRESSIVE PROCESSING STATE - Single state for ALL feedback types
   const [progressiveProgress, setProgressiveProgress] = useState<ProgressiveProgressType | null>(null);
   const [showProgressiveProgress, setShowProgressiveProgress] = useState(false);
   const [partialFeedback, setPartialFeedback] = useState<Feedback | null>(null);
-  const [currentAbortController, setCurrentAbortController] = useState<AbortController | null>(null); // NEW LINE
+  const [currentAbortController, setCurrentAbortController] = useState<AbortController | null>(null);
   
-  // Library state - Fixed with proper state management
+  // PRESERVED: Library state - Fixed with proper state management
   const [showLibrary, setShowLibrary] = useState(false);
   
-  // Ref to track if database test has been run
+  // NEW: Enhanced token-related state
+  const [userTokens, setUserTokens] = useState<UserTokens | null>(null);
+  const [tokenError, setTokenError] = useState<string | null>(null);
+  const [showTokenDetails, setShowTokenDetails] = useState(false);
+  const [writerSuggestions, setWriterSuggestions] = useState<WriterSuggestionsResponse | null>(null);
+  const [rewriteAnalysis, setRewriteAnalysis] = useState<any>(null);
+  
+  // PRESERVED: Ref to track if database test has been run
   const databaseTestRun = useRef(false);
   
+  // PRESERVED: Character and feedback managers
   const characterManager = new CharacterMemoryManager(characters);
   const feedbackGenerator = new FeedbackGenerator(characterManager);
 
-  // Fixed useEffect to prevent infinite loop
+  // PRESERVED: Fixed useEffect to prevent infinite loop
   useEffect(() => {
     // Get initial session
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -104,7 +125,7 @@ const App: React.FC = () => {
     return () => subscription.unsubscribe();
   }, []); // Empty dependency array - only run once
 
-  // Separate effect for database testing - only run once when user is authenticated
+  // PRESERVED: Separate effect for database testing - only run once when user is authenticated
   useEffect(() => {
     const testDatabase = async () => {
       if (databaseTestRun.current) return; // Prevent multiple runs
@@ -125,7 +146,7 @@ const App: React.FC = () => {
     }
   }, [session?.user?.id]); // Only depend on user ID, not the entire session object
 
-  // NEW: Cleanup effect to handle component unmount ONLY
+  // PRESERVED: Cleanup effect to handle component unmount ONLY
   useEffect(() => {
     return () => {
       // Only cancel when component actually unmounts, not on every re-render
@@ -137,13 +158,59 @@ const App: React.FC = () => {
     };
   }, []); // Empty dependency array - only run on mount/unmount
 
+  // NEW: Load token data when user changes
+  useEffect(() => {
+    if (session?.user) {
+      loadUserTokens();
+    } else {
+      setUserTokens(null);
+      setTokenError(null);
+    }
+  }, [session?.user?.id]);
+
+  // NEW: Load user token data
+  const loadUserTokens = async () => {
+    if (!session?.user) return;
+
+    try {
+      const tokens = await tokenService.getUserTokenBalance(session.user.id);
+      setUserTokens(tokens);
+      setTokenError(null);
+    } catch (error) {
+      console.error('Error loading user tokens:', error);
+      setTokenError('Failed to load token information');
+    }
+  };
+
+  // NEW: Refresh token display after operations
+  const refreshTokenDisplay = useCallback(() => {
+    if (session?.user) {
+      loadUserTokens();
+    }
+  }, [session?.user]);
+
+  // NEW: Handle token validation errors
+  const handleTokenError = (error: string, actionType: string) => {
+    setTokenError(error);
+    
+    if (error.includes('Insufficient tokens')) {
+      console.log(`Insufficient tokens for ${actionType}. Consider upgrade.`);
+    }
+  };
+
+  // PRESERVED: Sign out handler with token cleanup
   const handleSignOut = async () => {
     await supabase.auth.signOut();
     setSession(null);
     databaseTestRun.current = false; // Reset database test flag
+    // NEW: Clear token state
+    setUserTokens(null);
+    setTokenError(null);
+    setWriterSuggestions(null);
+    setRewriteAnalysis(null);
   };
 
-  // Fixed toggle function without showLibrary dependency to prevent recreation
+  // PRESERVED: Fixed toggle function without showLibrary dependency to prevent recreation
   const handleToggleLibrary = useCallback(() => {
     console.log('📚 Toggling library');
     setShowLibrary(prev => {
@@ -153,9 +220,7 @@ const App: React.FC = () => {
     });
   }, []); // Remove showLibrary dependency
 
-  /**
-   * ENHANCED CANCEL FUNCTION - Properly stops backend processing
-   */
+  // PRESERVED: ENHANCED CANCEL FUNCTION - Properly stops backend processing
   const handleCancelProcessing = async () => {
     console.log('🛑 User initiated cancel - stopping all processing...');
 
@@ -216,7 +281,7 @@ const App: React.FC = () => {
     return <Auth onAuthChange={setSession} />;
   }
 
-  // Helper function to get page-based title for chunked scripts
+  // PRESERVED: Helper function to get page-based title for chunked scripts
   const getChunkDisplayTitle = (chunkId: string | null): string => {
     if (!currentScript || !chunkId) return '';
     
@@ -237,6 +302,7 @@ const App: React.FC = () => {
     return `Pages ${startPage}-${endPage}`;
   };
 
+  // PRESERVED: Complete script selection handler
   const handleScriptSelected = async (scriptId: string) => {
     try {
       setIsLoadingScript(true);
@@ -320,14 +386,13 @@ const App: React.FC = () => {
     }
   };
 
-  /**
-   * Enhanced feedback generation with proper cancellation support
-   */
+  // ENHANCED: Complete feedback generation with token integration + ALL original cancellation support
   const handleSelectMentor = async (mentor: { id: string }, mode: FeedbackMode = feedbackMode) => {
-    console.log('🎬 Starting feedback generation with cancellation support...', {
+    console.log('🎬 Starting feedback generation with token validation + cancellation support...', {
       mentor: mentor.id,
       hasScript: !!currentScript,
-      hasScene: !!currentScene
+      hasScene: !!currentScene,
+      userId: session?.user?.id
     });
 
     setSelectedMentorId(mentor.id);
@@ -342,6 +407,7 @@ const App: React.FC = () => {
     setWriterSuggestionsStarted(false);
     setPartialFeedback(null);
     setFeedback(null);
+    setTokenError(null);
 
     // Create new abort controller for this operation
     const abortController = new AbortController();
@@ -353,10 +419,10 @@ const App: React.FC = () => {
 
     try {
       if (currentScript && currentScript.chunks.length > 1) {
-        // Handle chunked script feedback
+        // Handle chunked script feedback with token integration
         await handleChunkedFeedback(currentScript, selectedMentor, abortController);
       } else if (currentScene) {
-        // Handle single scene feedback
+        // Handle single scene feedback with token integration
         await handleSingleSceneFeedback(currentScene, selectedMentor, abortController);
       }
     } catch (error: any) {
@@ -381,10 +447,7 @@ const App: React.FC = () => {
     }
   };
 
-  // UNIFIED: Chunked feedback uses progressive processing
-  /**
-   * Enhanced chunked feedback with cancellation support
-   */
+  // ENHANCED: Chunked feedback with complete token integration + ALL original progressive processing
   const handleChunkedFeedback = async (
     script: FullScript, 
     mentor: any, 
@@ -395,89 +458,167 @@ const App: React.FC = () => {
     setPartialFeedback(null);
     
     try {
-      console.log('🚀 Starting progressive chunked feedback generation...', {
+      console.log('🚀 Starting token-aware progressive chunked feedback generation...', {
         mentor: mentor.name,
         chunkCount: script.chunks.length,
-        strategy: script.chunkingStrategy
+        strategy: script.chunkingStrategy,
+        userId: session?.user?.id
       });
 
-      // Use progressive feedback service for better rate limit handling
-      const newFeedback = await progressiveFeedbackService.processChunksProgressively(
-        script.chunks,
-        mentor,
-        characters,
-        (progress) => {
-          setProgressiveProgress(progress);
-          
-          // Show partial results as chunks complete
-          if (progress.completedChunks.length > 0 && !partialFeedback) {
-            const partialResult = {
-              id: `partial-feedback-${Date.now()}`,
-              mentorId: mentor.id,
-              sceneId: script.id,
-              timestamp: new Date(),
-              isChunked: true,
-              chunks: progress.completedChunks,
-              summary: {
-                overallStructure: `Processing ${progress.currentChunk}/${progress.totalChunks} sections...`,
-                keyStrengths: ['Progressive analysis in progress'],
-                majorIssues: progress.failedChunks.length > 0 
-                  ? [`${progress.failedChunks.length} sections encountered issues`]
-                  : [],
-                globalRecommendations: ['Review will be complete when all sections finish processing']
-              }
-            } as any;
+      // NEW: Token validation and processing if user is authenticated
+      if (session?.user) {
+        // Use token-aware service
+        const result = await feedbackChunkService.generateChunkedFeedback({
+          userId: session.user.id,
+          chunks: script.chunks,
+          mentor: mentor,
+          characters: characters,
+          actionType: 'chunked_feedback',
+          scriptId: script.id,
+          onProgress: (progress) => {
+            setProgressiveProgress(progress);
             
-            setPartialFeedback(partialResult);
-          }
-        },
-        {
-          maxConcurrent: 1,
-          retryAttempts: 3,
-          baseDelay: 3000,
-          exponentialBackoff: true,
-          showPartialResults: true,
-          processingType: 'chunked',
-          abortSignal: abortController.signal // NEW LINE: Pass abort signal
-        }
-      );
-      
-      // Only set final feedback if not cancelled
-      if (!abortController.signal.aborted) {
-        const finalFeedback = {
-          id: newFeedback.id,
-          mentorId: mentor.id,
-          sceneId: script.id,
-          timestamp: newFeedback.timestamp,
-          isChunked: true,
-          chunks: newFeedback.chunks,
-          summary: newFeedback.summary,
-          processingStats: (newFeedback as any).processingStats
-        } as any;
-        
-        setFeedback(finalFeedback);
-        setPartialFeedback(null);
-        setRewrite(null);
-        setDiffLines([]);
-        
-        console.log('✅ Progressive chunked feedback complete');
-        
-        // Start writer suggestions in background (with cancellation support)
-        if (!abortController.signal.aborted && selectedChunkId) {
-          const selectedChunk = script.chunks.find(c => c.id === selectedChunkId);
-          const chunkFeedback = newFeedback.chunks.find(cf => cf.chunkId === selectedChunkId);
+            // Show partial results as chunks complete
+            if (progress.completedChunks.length > 0 && !partialFeedback) {
+              const partialResult = {
+                id: `partial-feedback-${Date.now()}`,
+                mentorId: mentor.id,
+                sceneId: script.id,
+                timestamp: new Date(),
+                isChunked: true,
+                chunks: progress.completedChunks,
+                summary: {
+                  overallStructure: `Processing ${progress.currentChunk}/${progress.totalChunks} sections...`,
+                  keyStrengths: ['Progressive analysis in progress'],
+                  majorIssues: progress.failedChunks.length > 0 
+                    ? [`${progress.failedChunks.length} sections encountered issues`]
+                    : [],
+                  globalRecommendations: ['Review will be complete when all sections finish processing']
+                }
+              } as any;
+              
+              setPartialFeedback(partialResult);
+            }
+          },
+          abortSignal: abortController.signal
+        });
+
+        if (result.success) {
+          const finalFeedback = {
+            id: result.feedback.id,
+            mentorId: mentor.id,
+            sceneId: script.id,
+            timestamp: result.feedback.timestamp,
+            isChunked: true,
+            chunks: result.feedback.chunks,
+            summary: result.feedback.summary,
+            processingStats: (result.feedback as any).processingStats
+          } as any;
           
-          if (selectedChunk && chunkFeedback && !(chunkFeedback as any).processingError) {
-            setIsGeneratingWriterSuggestions(true);
-            setWriterSuggestionsStarted(true);
-            generateWriterSuggestionsInBackground(selectedChunk, finalFeedback, abortController);
+          setFeedback(finalFeedback);
+          setPartialFeedback(null);
+          setRewrite(null);
+          setDiffLines([]);
+          refreshTokenDisplay();
+          
+          console.log('✅ Token-aware progressive chunked feedback complete');
+          
+          // Start writer suggestions in background (with cancellation support)
+          if (!abortController.signal.aborted && selectedChunkId) {
+            const selectedChunk = script.chunks.find(c => c.id === selectedChunkId);
+            const chunkFeedback = result.feedback.chunks.find(cf => cf.chunkId === selectedChunkId);
+            
+            if (selectedChunk && chunkFeedback && !(chunkFeedback as any).processingError) {
+              setIsGeneratingWriterSuggestions(true);
+              setWriterSuggestionsStarted(true);
+              generateWriterSuggestionsInBackground(selectedChunk, finalFeedback, abortController);
+            }
+          }
+        } else {
+          handleTokenError(result.error || 'Chunked feedback generation failed', 'chunked_feedback');
+        }
+      } else {
+        // PRESERVED: Fallback to original progressive processing without token integration
+        const newFeedback = await progressiveFeedbackService.processChunksProgressively(
+          script.chunks,
+          mentor,
+          characters,
+          (progress) => {
+            setProgressiveProgress(progress);
+            
+            // Show partial results as chunks complete
+            if (progress.completedChunks.length > 0 && !partialFeedback) {
+              const partialResult = {
+                id: `partial-feedback-${Date.now()}`,
+                mentorId: mentor.id,
+                sceneId: script.id,
+                timestamp: new Date(),
+                isChunked: true,
+                chunks: progress.completedChunks,
+                summary: {
+                  overallStructure: `Processing ${progress.currentChunk}/${progress.totalChunks} sections...`,
+                  keyStrengths: ['Progressive analysis in progress'],
+                  majorIssues: progress.failedChunks.length > 0 
+                    ? [`${progress.failedChunks.length} sections encountered issues`]
+                    : [],
+                  globalRecommendations: ['Review will be complete when all sections finish processing']
+                }
+              } as any;
+              
+              setPartialFeedback(partialResult);
+            }
+          },
+          {
+            maxConcurrent: 1,
+            retryAttempts: 3,
+            baseDelay: 3000,
+            exponentialBackoff: true,
+            showPartialResults: true,
+            processingType: 'chunked',
+            abortSignal: abortController.signal
+          }
+        );
+        
+        // Only set final feedback if not cancelled
+        if (!abortController.signal.aborted) {
+          const finalFeedback = {
+            id: newFeedback.id,
+            mentorId: mentor.id,
+            sceneId: script.id,
+            timestamp: newFeedback.timestamp,
+            isChunked: true,
+            chunks: newFeedback.chunks,
+            summary: newFeedback.summary,
+            processingStats: (newFeedback as any).processingStats
+          } as any;
+          
+          setFeedback(finalFeedback);
+          setPartialFeedback(null);
+          setRewrite(null);
+          setDiffLines([]);
+          
+          console.log('✅ Progressive chunked feedback complete');
+          
+          // Start writer suggestions in background (with cancellation support)
+          if (!abortController.signal.aborted && selectedChunkId) {
+            const selectedChunk = script.chunks.find(c => c.id === selectedChunkId);
+            const chunkFeedback = newFeedback.chunks.find(cf => cf.chunkId === selectedChunkId);
+            
+            if (selectedChunk && chunkFeedback && !(chunkFeedback as any).processingError) {
+              setIsGeneratingWriterSuggestions(true);
+              setWriterSuggestionsStarted(true);
+              generateWriterSuggestionsInBackground(selectedChunk, finalFeedback, abortController);
+            }
           }
         }
       }
       
-   } catch (error: any) {
+    } catch (error: any) {
       if (!abortController.signal.aborted) {
         console.error('❌ Progressive chunked feedback failed:', error);
+        if (error.message?.includes('Insufficient tokens')) {
+          handleTokenError(error.message, 'chunked_feedback');
+        }
         setFeedback(null);
         setPartialFeedback(null);
       }
@@ -485,10 +626,7 @@ const App: React.FC = () => {
     }
   };
 
-  // UNIFIED: Single scene feedback now uses progressive processing
-  /**
-   * Enhanced single scene feedback with cancellation support
-   */
+  // ENHANCED: Single scene feedback with complete token integration + ALL original progressive processing
   const handleSingleSceneFeedback = async (
     scene: ScriptScene, 
     mentor: any, 
@@ -499,100 +637,140 @@ const App: React.FC = () => {
     setPartialFeedback(null);
     
     try {
-      console.log('🚀 Starting progressive single scene feedback...', {
+      console.log('🚀 Starting token-aware progressive single scene feedback...', {
         mentor: mentor.name,
-        sceneLength: scene.content.length
+        sceneLength: scene.content.length,
+        userId: session?.user?.id
       });
 
-      // Convert single scene to chunk format for progressive processing
-      const sceneAsChunk: ScriptChunk = {
-        id: scene.id,
-        title: scene.title,
-        content: scene.content,
-        characters: scene.characters,
-        chunkType: 'scene',
-        startPage: 1,
-        endPage: 1
-      };
-
-      // Use progressive feedback service for consistency
-      const newFeedback = await progressiveFeedbackService.processChunksProgressively(
-        [sceneAsChunk],
-        mentor,
-        characters,
-        (progress) => {
-          setProgressiveProgress(progress);
-          
-          // Show partial results for single scene
-          if (progress.completedChunks.length > 0 && !partialFeedback) {
-            const partialResult = {
-              id: `partial-feedback-${Date.now()}`,
-              mentorId: mentor.id,
-              sceneId: scene.id,
-              timestamp: new Date(),
-              isChunked: false,
-              structuredContent: progress.completedChunks[0]?.structuredContent || '',
-              scratchpadContent: progress.completedChunks[0]?.scratchpadContent || '',
-              categories: progress.completedChunks[0]?.categories || {
-                structure: 'Analyzing...',
-                dialogue: 'Analyzing...',
-                pacing: 'Analyzing...',
-                theme: 'Analyzing...'
-              }
-            } as any;
-            
-            setPartialFeedback(partialResult);
-          }
-        },
-        {
-          maxConcurrent: 1,
-          retryAttempts: 3,
-          baseDelay: 2000,
-          exponentialBackoff: true,
-          showPartialResults: true,
-          processingType: 'single',
-          abortSignal: abortController.signal // NEW LINE: Pass abort signal
-        }
-      );
-      
-      // Convert chunked feedback back to single scene feedback format
-      // Only set final feedback if not cancelled
-      if (!abortController.signal.aborted) {
-        const chunkFeedback = newFeedback.chunks[0];
-        const finalFeedback = {
-          id: newFeedback.id,
+      // NEW: Token validation and processing if user is authenticated
+      if (session?.user) {
+        // Use token-aware service
+        const result = await aiFeedbackService.generateDualFeedback({
+          userId: session.user.id,
+          scene: scene,
+          mentor: mentor,
+          characters: characters,
+          actionType: 'single_feedback',
+          scriptId: scene.id,
           mentorId: mentor.id,
           sceneId: scene.id,
-          timestamp: newFeedback.timestamp,
-          isChunked: false,
-          structuredContent: chunkFeedback?.structuredContent || '',
-          scratchpadContent: chunkFeedback?.scratchpadContent || '',
-          categories: chunkFeedback?.categories || {
-            structure: 'Analyzed',
-            dialogue: 'Analyzed',
-            pacing: 'Analyzed',
-            theme: 'Analyzed'
+          abortSignal: abortController.signal
+        });
+
+        if (result.success) {
+          setFeedback(result.feedback);
+          setPartialFeedback(null);
+          setRewrite(null);
+          setDiffLines([]);
+          refreshTokenDisplay();
+          
+          console.log('✅ Token-aware progressive single scene feedback complete');
+          
+          // Start writer suggestions in background (with cancellation support)
+          if (!abortController.signal.aborted) {
+            setIsGeneratingWriterSuggestions(true);
+            setWriterSuggestionsStarted(true);
+            generateWriterSuggestionsInBackground(scene, result.feedback, abortController);
           }
-        } as Feedback;
+        } else {
+          handleTokenError(result.error || 'Single scene feedback generation failed', 'single_feedback');
+        }
+      } else {
+        // PRESERVED: Fallback to original progressive processing without token integration
+        // Convert single scene to chunk format for progressive processing
+        const sceneAsChunk: ScriptChunk = {
+          id: scene.id,
+          title: scene.title,
+          content: scene.content,
+          characters: scene.characters,
+          chunkType: 'scene',
+          startPage: 1,
+          endPage: 1
+        };
+
+        // Use progressive feedback service for consistency
+        const newFeedback = await progressiveFeedbackService.processChunksProgressively(
+          [sceneAsChunk],
+          mentor,
+          characters,
+          (progress) => {
+            setProgressiveProgress(progress);
+            
+            // Show partial results for single scene
+            if (progress.completedChunks.length > 0 && !partialFeedback) {
+              const partialResult = {
+                id: `partial-feedback-${Date.now()}`,
+                mentorId: mentor.id,
+                sceneId: scene.id,
+                timestamp: new Date(),
+                isChunked: false,
+                structuredContent: progress.completedChunks[0]?.structuredContent || '',
+                scratchpadContent: progress.completedChunks[0]?.scratchpadContent || '',
+                categories: progress.completedChunks[0]?.categories || {
+                  structure: 'Analyzing...',
+                  dialogue: 'Analyzing...',
+                  pacing: 'Analyzing...',
+                  theme: 'Analyzing...'
+                }
+              } as any;
+              
+              setPartialFeedback(partialResult);
+            }
+          },
+          {
+            maxConcurrent: 1,
+            retryAttempts: 3,
+            baseDelay: 2000,
+            exponentialBackoff: true,
+            showPartialResults: true,
+            processingType: 'single',
+            abortSignal: abortController.signal
+          }
+        );
         
-        setFeedback(finalFeedback);
-        setPartialFeedback(null);
-        setRewrite(null);
-        setDiffLines([]);
-        
-        console.log('✅ Progressive single scene feedback complete');
-        
-        // Start writer suggestions in background (with cancellation support)
+        // Convert chunked feedback back to single scene feedback format
+        // Only set final feedback if not cancelled
         if (!abortController.signal.aborted) {
-          setIsGeneratingWriterSuggestions(true);
-          setWriterSuggestionsStarted(true);
-          generateWriterSuggestionsInBackground(scene, finalFeedback, abortController);
+          const chunkFeedback = newFeedback.chunks[0];
+          const finalFeedback = {
+            id: newFeedback.id,
+            mentorId: mentor.id,
+            sceneId: scene.id,
+            timestamp: newFeedback.timestamp,
+            isChunked: false,
+            structuredContent: chunkFeedback?.structuredContent || '',
+            scratchpadContent: chunkFeedback?.scratchpadContent || '',
+            categories: chunkFeedback?.categories || {
+              structure: 'Analyzed',
+              dialogue: 'Analyzed',
+              pacing: 'Analyzed',
+              theme: 'Analyzed'
+            }
+          } as Feedback;
+          
+          setFeedback(finalFeedback);
+          setPartialFeedback(null);
+          setRewrite(null);
+          setDiffLines([]);
+          
+          console.log('✅ Progressive single scene feedback complete');
+          
+          // Start writer suggestions in background (with cancellation support)
+          if (!abortController.signal.aborted) {
+            setIsGeneratingWriterSuggestions(true);
+            setWriterSuggestionsStarted(true);
+            generateWriterSuggestionsInBackground(scene, finalFeedback, abortController);
+          }
         }
       }
       
     } catch (error: any) {
       if (!abortController.signal.aborted) {
         console.error('❌ Progressive single scene feedback failed:', error);
+        if (error.message?.includes('Insufficient tokens')) {
+          handleTokenError(error.message, 'single_feedback');
+        }
         setFeedback(null);
         setPartialFeedback(null);
       }
@@ -600,10 +778,7 @@ const App: React.FC = () => {
     }
   };
 
-  // This fixes the state update issue inside the setTimeout
-  /**
-   * Enhanced writer suggestions with cancellation support
-   */
+  // PRESERVED: Complete enhanced writer suggestions with cancellation support + token awareness
   const generateWriterSuggestionsInBackground = async (
     scene: ScriptScene | ScriptChunk, 
     feedback: Feedback,
@@ -614,7 +789,8 @@ const App: React.FC = () => {
         sceneType: 'chunkType' in scene ? 'chunk' : 'scene',
         sceneTitle: scene.title,
         mentorId: feedback.mentorId,
-        isBlended: feedback.mentorId === 'blended'
+        isBlended: feedback.mentorId === 'blended',
+        userId: session?.user?.id
       });
       
       // Handle blended mentor case specially - THIS IS THE CRITICAL FIX
@@ -628,7 +804,10 @@ const App: React.FC = () => {
           styleNotes: 'Combined insights from multiple mentors',
           avatar: 'https://images.pexels.com/photos/7102/notes-macbook-study-conference.jpg?auto=compress&cs=tinysrgb&w=600',
           accent: '#8b5cf6',
-          mantra: 'Multiple perspectives reveal the full picture.'
+          mantra: 'Multiple perspectives reveal the full picture.',
+          feedbackStyle: 'analytical' as const,
+          priorities: ['multi-perspective-analysis'],
+          analysisApproach: 'blended'
         };
         console.log('🎭 Using blended mentor for writer suggestions background processing');
       } else {
@@ -649,7 +828,6 @@ const App: React.FC = () => {
       
       console.log('⏰ Writer suggestions timeout scheduled for', preparationTime + 'ms');
       
-      // CRITICAL FIX: Use setTimeout with proper state updates
       // Check for cancellation before starting
       if (abortController.signal.aborted) {
         console.log('🛑 Writer suggestions cancelled before starting');
@@ -689,11 +867,52 @@ const App: React.FC = () => {
     }
   };
 
-  const handleShowWriterSuggestions = () => {
-    console.log('👀 User requested writer suggestions display');
-    setShowWriterSuggestions(true);
+  // ENHANCED: Writer suggestions with token integration
+  const handleShowWriterSuggestions = async () => {
+    console.log('👀 User requested writer suggestions display with token validation');
+
+    try {
+      // NEW: Token-aware writer agent if we have feedback and user is authenticated
+      if (feedback && !writerSuggestions && session?.user) {
+        const selectedMentor = mentors.find(m => m.id === feedback.mentorId) || {
+          id: feedback.mentorId,
+          name: feedback.mentorId === 'blended' ? 'Blended Mentors' : 'Unknown Mentor',
+          tone: 'analytical',
+          styleNotes: 'AI generated feedback',
+          avatar: '',
+          accent: '#8b5cf6',
+          mantra: 'Focus on the craft.',
+          feedbackStyle: 'analytical' as const,
+          priorities: ['clarity'],
+          analysisApproach: 'systematic'
+        };
+
+        const result = await writerAgentService.generateWriterSuggestions({
+          userId: session.user.id,
+          feedback: feedback,
+          mentor: selectedMentor,
+          actionType: 'writer_agent',
+          scriptId: currentScript?.id || currentScene?.id
+        });
+
+        if (result.success) {
+          setWriterSuggestions(result.suggestions);
+          refreshTokenDisplay();
+        } else {
+          handleTokenError(result.error || 'Writer suggestions generation failed', 'writer_agent');
+          // Still show the UI even if token-aware generation fails
+        }
+      }
+
+      setShowWriterSuggestions(true);
+    } catch (error) {
+      console.error('❌ Error in writer suggestions:', error);
+      // Still show the UI even on error
+      setShowWriterSuggestions(true);
+    }
   };
   
+  // PRESERVED: Complete feedback mode change handler
   const handleFeedbackModeChange = async (mode: FeedbackMode) => {
     setFeedbackMode(mode);
     
@@ -709,13 +928,14 @@ const App: React.FC = () => {
       if (!hasDualContent) {
         const mentor = mentors.find(m => m.id === selectedMentorId);
         if (mentor) {
-          await handleSingleSceneFeedback(currentScene, mentor);
+          const abortController = new AbortController();
+          await handleSingleSceneFeedback(currentScene, mentor, abortController);
         }
       }
     }
   };
 
-  // UNIFIED: Blended mentors feedback now uses progressive processing
+  // ENHANCED: Complete blended mentors feedback with token integration + ALL original progressive processing
   const handleBlendMentors = async (mentorWeights: MentorWeights) => {
     const targetScene = currentScene || (currentScript && selectedChunkId ?
       currentScript.chunks.find(chunk => chunk.id === selectedChunkId) : null);
@@ -730,11 +950,13 @@ const App: React.FC = () => {
       setIsGeneratingFeedback(true);
       setShowProgressiveProgress(true);
       setPartialFeedback(null);
+      setTokenError(null);
       
       try {
-        console.log('🔀 Starting progressive blended feedback...', {
+        console.log('🔀 Starting token-aware progressive blended feedback...', {
           mentors: selectedMentorsList.map(m => m.name),
-          targetType: currentScript ? 'chunked' : 'single'
+          targetType: currentScript ? 'chunked' : 'single',
+          userId: session?.user?.id
         });
 
         // Create blended mentor object for progressive processing
@@ -745,84 +967,162 @@ const App: React.FC = () => {
           styleNotes: `Combined insights from: ${selectedMentorsList.map(m => m.name).join(', ')}`,
           avatar: 'https://images.pexels.com/photos/7102/notes-macbook-study-conference.jpg?auto=compress&cs=tinysrgb&w=600',
           accent: '#8b5cf6',
-          mantra: 'Multiple perspectives reveal the full picture.'
+          mantra: 'Multiple perspectives reveal the full picture.',
+          feedbackStyle: 'analytical' as const,
+          priorities: ['multi-perspective-analysis'],
+          analysisApproach: 'blended'
         };
         
         if (currentScript && currentScript.chunks.length > 1) {
-          // Handle blended feedback for chunked scripts using progressive processing
-          const newFeedback = await progressiveFeedbackService.processChunksProgressively(
-            currentScript.chunks,
-            blendedMentor,
-            characters,
-            (progress) => {
-              setProgressiveProgress({
-                ...progress,
-                message: `Blending ${selectedMentorsList.length} mentors for ${progress.chunkTitle}`,
-                processingType: 'blended',
-                mentorCount: selectedMentorsList.length,
-                blendingMentors: selectedMentorsList.map(m => m.name)
-              });
-              
-              // Show partial blended results
-              if (progress.completedChunks.length > 0 && !partialFeedback) {
-                const partialResult = {
-                  id: `partial-blended-feedback-${Date.now()}`,
-                  mentorId: 'blended',
-                  sceneId: currentScript.id,
-                  timestamp: new Date(),
-                  isChunked: true,
-                  chunks: progress.completedChunks,
-                  summary: {
-                    overallStructure: `Blending ${selectedMentorsList.length} mentors: ${progress.currentChunk}/${progress.totalChunks} sections...`,
-                    keyStrengths: ['Multi-perspective analysis in progress'],
-                    majorIssues: progress.failedChunks.length > 0 ? 
-                      [`${progress.failedChunks.length} sections need additional blending`] : [],
-                    globalRecommendations: ['Blended mentor analysis in progress']
-                  }
-                } as any;
+          // NEW: Token-aware blended chunked feedback if user is authenticated
+          if (session?.user) {
+            const result = await feedbackChunkService.generateChunkedFeedback({
+              userId: session.user.id,
+              chunks: currentScript.chunks,
+              mentor: blendedMentor,
+              characters: characters,
+              actionType: 'blended_feedback',
+              scriptId: currentScript.id,
+              onProgress: (progress) => {
+                setProgressiveProgress({
+                  ...progress,
+                  message: `Blending ${selectedMentorsList.length} mentors for ${progress.chunkTitle}`,
+                  processingType: 'blended' as any,
+                  mentorCount: selectedMentorsList.length,
+                  blendingMentors: selectedMentorsList.map(m => m.name)
+                });
                 
-                setPartialFeedback(partialResult);
+                // Show partial blended results
+                if (progress.completedChunks.length > 0 && !partialFeedback) {
+                  const partialResult = {
+                    id: `partial-blended-feedback-${Date.now()}`,
+                    mentorId: 'blended',
+                    sceneId: currentScript.id,
+                    timestamp: new Date(),
+                    isChunked: true,
+                    chunks: progress.completedChunks,
+                    summary: {
+                      overallStructure: `Blending ${selectedMentorsList.length} mentors: ${progress.currentChunk}/${progress.totalChunks} sections...`,
+                      keyStrengths: ['Multi-perspective analysis in progress'],
+                      majorIssues: progress.failedChunks.length > 0 ? 
+                        [`${progress.failedChunks.length} sections need additional blending`] : [],
+                      globalRecommendations: ['Blended mentor analysis in progress']
+                    }
+                  } as any;
+                  
+                  setPartialFeedback(partialResult);
+                }
+              },
+              abortSignal: currentAbortController?.signal
+            });
+
+            if (result.success) {
+              const blendedFeedback = {
+                id: result.feedback.id,
+                mentorId: 'blended',
+                sceneId: currentScript.id,
+                timestamp: result.feedback.timestamp,
+                isChunked: true,
+                chunks: result.feedback.chunks,
+                summary: {
+                  ...result.feedback.summary,
+                  overallStructure: `Blended analysis from ${selectedMentorsList.length} mentors: ${result.feedback.summary.overallStructure}`
+                }
+              } as any;
+
+              setFeedback(blendedFeedback);
+              refreshTokenDisplay();
+              
+              // Enable writer suggestions for blended chunked feedback
+              if (selectedChunkId) {
+                const selectedChunk = currentScript.chunks.find(c => c.id === selectedChunkId);
+                const chunkFeedback = result.feedback.chunks.find(cf => cf.chunkId === selectedChunkId);
+                
+                if (selectedChunk && chunkFeedback && !(chunkFeedback as any).processingError) {
+                  setIsGeneratingWriterSuggestions(true);
+                  setWriterSuggestionsStarted(true);
+                  generateWriterSuggestionsInBackground(selectedChunk, blendedFeedback, currentAbortController!);
+                }
               }
-            },
-            {
-              maxConcurrent: 1,
-              retryAttempts: 2, // Fewer retries for blended since it's more complex
-              baseDelay: 4000, // Longer delay for blended processing
-              exponentialBackoff: true,
-              showPartialResults: true,
-              processingType: 'blended'
+            } else {
+              handleTokenError(result.error || 'Blended chunked feedback failed', 'blended_feedback');
             }
-          );
+          } else {
+            // PRESERVED: Fallback to original progressive processing without tokens
+            const newFeedback = await progressiveFeedbackService.processChunksProgressively(
+              currentScript.chunks,
+              blendedMentor,
+              characters,
+              (progress) => {
+                setProgressiveProgress({
+                  ...progress,
+                  message: `Blending ${selectedMentorsList.length} mentors for ${progress.chunkTitle}`,
+                  processingType: 'blended' as any,
+                  mentorCount: selectedMentorsList.length,
+                  blendingMentors: selectedMentorsList.map(m => m.name)
+                });
+                
+                // Show partial blended results
+                if (progress.completedChunks.length > 0 && !partialFeedback) {
+                  const partialResult = {
+                    id: `partial-blended-feedback-${Date.now()}`,
+                    mentorId: 'blended',
+                    sceneId: currentScript.id,
+                    timestamp: new Date(),
+                    isChunked: true,
+                    chunks: progress.completedChunks,
+                    summary: {
+                      overallStructure: `Blending ${selectedMentorsList.length} mentors: ${progress.currentChunk}/${progress.totalChunks} sections...`,
+                      keyStrengths: ['Multi-perspective analysis in progress'],
+                      majorIssues: progress.failedChunks.length > 0 ? 
+                        [`${progress.failedChunks.length} sections need additional blending`] : [],
+                      globalRecommendations: ['Blended mentor analysis in progress']
+                    }
+                  } as any;
+                  
+                  setPartialFeedback(partialResult);
+                }
+              },
+              {
+                maxConcurrent: 1,
+                retryAttempts: 2, // Fewer retries for blended since it's more complex
+                baseDelay: 4000, // Longer delay for blended processing
+                exponentialBackoff: true,
+                showPartialResults: true,
+                processingType: 'blended'
+              }
+            );
 
-          const blendedFeedback = {
-            id: newFeedback.id,
-            mentorId: 'blended',
-            sceneId: currentScript.id,
-            timestamp: newFeedback.timestamp,
-            isChunked: true,
-            chunks: newFeedback.chunks,
-            summary: {
-              ...newFeedback.summary,
-              overallStructure: `Blended analysis from ${selectedMentorsList.length} mentors across ${currentScript.chunks.length} sections: ${newFeedback.summary.overallStructure}`
-            }
-          } as any;
+            const blendedFeedback = {
+              id: newFeedback.id,
+              mentorId: 'blended',
+              sceneId: currentScript.id,
+              timestamp: newFeedback.timestamp,
+              isChunked: true,
+              chunks: newFeedback.chunks,
+              summary: {
+                ...newFeedback.summary,
+                overallStructure: `Blended analysis from ${selectedMentorsList.length} mentors across ${currentScript.chunks.length} sections: ${newFeedback.summary.overallStructure}`
+              }
+            } as any;
 
-          setFeedback(blendedFeedback);
-          
-          // Enable writer suggestions for blended chunked feedback
-          if (selectedChunkId) {
-            const selectedChunk = currentScript.chunks.find(c => c.id === selectedChunkId);
-            const chunkFeedback = newFeedback.chunks.find(cf => cf.chunkId === selectedChunkId);
+            setFeedback(blendedFeedback);
             
-            if (selectedChunk && chunkFeedback && !(chunkFeedback as any).processingError) {
-              setIsGeneratingWriterSuggestions(true);
-              setWriterSuggestionsStarted(true);
-              generateWriterSuggestionsInBackground(selectedChunk, blendedFeedback);
+            // Enable writer suggestions for blended chunked feedback
+            if (selectedChunkId) {
+              const selectedChunk = currentScript.chunks.find(c => c.id === selectedChunkId);
+              const chunkFeedback = newFeedback.chunks.find(cf => cf.chunkId === selectedChunkId);
+              
+              if (selectedChunk && chunkFeedback && !(chunkFeedback as any).processingError) {
+                setIsGeneratingWriterSuggestions(true);
+                setWriterSuggestionsStarted(true);
+                generateWriterSuggestionsInBackground(selectedChunk, blendedFeedback, new AbortController());
+              }
             }
           }
 
         } else {
-          // Handle blended feedback for single scene using progressive processing
+          // Handle blended feedback for single scene
           const sceneForBlending = 'chunkType' in targetScene ? {
             id: targetScene.id,
             title: targetScene.title,
@@ -830,85 +1130,113 @@ const App: React.FC = () => {
             characters: targetScene.characters
           } as ScriptScene : targetScene;
           
-          // Convert single scene to chunk format for progressive processing
-          const sceneAsChunk: ScriptChunk = {
-            id: sceneForBlending.id,
-            title: `${sceneForBlending.title} (Blended Analysis)`,
-            content: sceneForBlending.content,
-            characters: sceneForBlending.characters,
-            chunkType: 'scene',
-            startPage: 1,
-            endPage: 1
-          };
+          // NEW: Token-aware blended single scene feedback if user is authenticated
+          if (session?.user) {
+            const result = await aiFeedbackService.generateBlendedFeedback({
+              userId: session.user.id,
+              scene: sceneForBlending,
+              mentors: selectedMentorsList,
+              mentorWeights: mentorWeights,
+              characters: characters,
+              actionType: 'blended_feedback',
+              scriptId: sceneForBlending.id,
+              sceneId: sceneForBlending.id,
+              abortSignal: currentAbortController?.signal
+            });
 
-          const newFeedback = await progressiveFeedbackService.processChunksProgressively(
-            [sceneAsChunk],
-            blendedMentor,
-            characters,
-            (progress) => {
-              setProgressiveProgress({
-                ...progress,
-                message: `Blending insights from ${selectedMentorsList.length} mentors: ${progress.message}`,
-                processingType: 'blended',
-                mentorCount: selectedMentorsList.length,
-                blendingMentors: selectedMentorsList.map(m => m.name)
-              });
+            if (result.success) {
+              setFeedback(result.feedback);
+              refreshTokenDisplay();
               
-              // Show partial blended results for single scene
-              if (progress.completedChunks.length > 0 && !partialFeedback) {
-                const partialResult = {
-                  id: `partial-blended-feedback-${Date.now()}`,
-                  mentorId: 'blended',
-                  sceneId: sceneForBlending.id,
-                  timestamp: new Date(),
-                  isChunked: false,
-                  structuredContent: progress.completedChunks[0]?.structuredContent || '',
-                  scratchpadContent: progress.completedChunks[0]?.scratchpadContent || '',
-                  categories: progress.completedChunks[0]?.categories || {
-                    structure: 'Blending perspectives...',
-                    dialogue: 'Blending perspectives...',
-                    pacing: 'Blending perspectives...',
-                    theme: 'Blending perspectives...'
-                  }
-                } as any;
+              // Enable writer suggestions for blended single scene feedback
+              setIsGeneratingWriterSuggestions(true);
+              setWriterSuggestionsStarted(true);
+              generateWriterSuggestionsInBackground(sceneForBlending, result.feedback, currentAbortController!);
+            } else {
+              handleTokenError(result.error || 'Blended single scene feedback failed', 'blended_feedback');
+            }
+          } else {
+            // PRESERVED: Fallback to original progressive processing without tokens
+            // Convert single scene to chunk format for progressive processing
+            const sceneAsChunk: ScriptChunk = {
+              id: sceneForBlending.id,
+              title: `${sceneForBlending.title} (Blended Analysis)`,
+              content: sceneForBlending.content,
+              characters: sceneForBlending.characters,
+              chunkType: 'scene',
+              startPage: 1,
+              endPage: 1
+            };
+
+            const newFeedback = await progressiveFeedbackService.processChunksProgressively(
+              [sceneAsChunk],
+              blendedMentor,
+              characters,
+              (progress) => {
+                setProgressiveProgress({
+                  ...progress,
+                  message: `Blending insights from ${selectedMentorsList.length} mentors: ${progress.message}`,
+                  processingType: 'blended' as any,
+                  mentorCount: selectedMentorsList.length,
+                  blendingMentors: selectedMentorsList.map(m => m.name)
+                });
                 
-                setPartialFeedback(partialResult);
+                // Show partial blended results for single scene
+                if (progress.completedChunks.length > 0 && !partialFeedback) {
+                  const partialResult = {
+                    id: `partial-blended-feedback-${Date.now()}`,
+                    mentorId: 'blended',
+                    sceneId: sceneForBlending.id,
+                    timestamp: new Date(),
+                    isChunked: false,
+                    structuredContent: progress.completedChunks[0]?.structuredContent || '',
+                    scratchpadContent: progress.completedChunks[0]?.scratchpadContent || '',
+                    categories: progress.completedChunks[0]?.categories || {
+                      structure: 'Blending perspectives...',
+                      dialogue: 'Blending perspectives...',
+                      pacing: 'Blending perspectives...',
+                      theme: 'Blending perspectives...'
+                    }
+                  } as any;
+                  
+                  setPartialFeedback(partialResult);
+                }
+              },
+              {
+                maxConcurrent: 1,
+                retryAttempts: 2,
+                baseDelay: 3000,
+                exponentialBackoff: true,
+                showPartialResults: true,
+                processingType: 'blended'
               }
-            },
-            {
-              maxConcurrent: 1,
-              retryAttempts: 2,
-              baseDelay: 3000,
-              exponentialBackoff: true,
-              showPartialResults: true,
-              processingType: 'blended'
-            }
-          );
-          
-          // Convert back to single scene feedback format
-          const chunkFeedback = newFeedback.chunks[0];
-          const blendedFeedback = {
-            id: newFeedback.id,
-            mentorId: 'blended',
-            sceneId: sceneForBlending.id,
-            timestamp: newFeedback.timestamp,
-            isChunked: false,
-            structuredContent: chunkFeedback?.structuredContent || '',
-            scratchpadContent: chunkFeedback?.scratchpadContent || '',
-            categories: chunkFeedback?.categories || {
-              structure: 'Blended analysis',
-              dialogue: 'Blended analysis',
-              pacing: 'Blended analysis',
-              theme: 'Blended analysis'
-            }
-          } as Feedback;
-          
-          setFeedback(blendedFeedback);
-          
-          // Enable writer suggestions for blended single scene feedback
-          setIsGeneratingWriterSuggestions(true);
-          setWriterSuggestionsStarted(true);
-          generateWriterSuggestionsInBackground(sceneForBlending, blendedFeedback);
+            );
+            
+            // Convert back to single scene feedback format
+            const chunkFeedback = newFeedback.chunks[0];
+            const blendedFeedback = {
+              id: newFeedback.id,
+              mentorId: 'blended',
+              sceneId: sceneForBlending.id,
+              timestamp: newFeedback.timestamp,
+              isChunked: false,
+              structuredContent: chunkFeedback?.structuredContent || '',
+              scratchpadContent: chunkFeedback?.scratchpadContent || '',
+              categories: chunkFeedback?.categories || {
+                structure: 'Blended analysis',
+                dialogue: 'Blended analysis',
+                pacing: 'Blended analysis',
+                theme: 'Blended analysis'
+              }
+            } as Feedback;
+            
+            setFeedback(blendedFeedback);
+            
+            // Enable writer suggestions for blended single scene feedback
+            setIsGeneratingWriterSuggestions(true);
+            setWriterSuggestionsStarted(true);
+            generateWriterSuggestionsInBackground(sceneForBlending, blendedFeedback, new AbortController());
+          }
         }
 
         // Set blended mentor state
@@ -918,10 +1246,13 @@ const App: React.FC = () => {
         setDiffLines([]);
         setPartialFeedback(null);
         
-        console.log('✅ Progressive blended feedback complete');
+        console.log('✅ Token-aware progressive blended feedback complete');
         
-      } catch (error) {
+      } catch (error: any) {
         console.error('❌ Progressive blended feedback failed:', error);
+        if (error.message?.includes('Insufficient tokens')) {
+          handleTokenError(error.message, 'blended_feedback');
+        }
         setFeedback(null);
         setPartialFeedback(null);
         setWriterSuggestionsReady(false);
@@ -935,6 +1266,7 @@ const App: React.FC = () => {
     }
   };
 
+  // PRESERVED: Complete script upload handler
   const handleScriptUploaded = async (content: string, title: string, parsedCharacters: Record<string, any>) => {
     try {
       setIsLoadingScript(true);
@@ -974,7 +1306,8 @@ const App: React.FC = () => {
         if (selectedMentorId && selectedMentorId !== 'blended') {
           const mentor = mentors.find(m => m.id === selectedMentorId);
           if (mentor) {
-            await handleChunkedFeedback(fullScript, mentor);
+            const abortController = new AbortController();
+            await handleChunkedFeedback(fullScript, mentor, abortController);
           }
         }
         
@@ -1074,7 +1407,8 @@ const App: React.FC = () => {
         if (selectedMentorId && selectedMentorId !== 'blended') {
           const mentor = mentors.find(m => m.id === selectedMentorId);
           if (mentor) {
-            await handleSingleSceneFeedback(newScene, mentor);
+            const abortController = new AbortController();
+            await handleSingleSceneFeedback(newScene, mentor, abortController);
           }
         }
         
@@ -1106,7 +1440,7 @@ const App: React.FC = () => {
     }
   };
 
-  // Updated handleChunkSelection to regenerate writer suggestions for the new chunk
+  // PRESERVED: Updated handleChunkSelection to regenerate writer suggestions for the new chunk
   const handleChunkSelection = (chunkId: string) => {
     setSelectedChunkId(chunkId);
     
@@ -1124,11 +1458,12 @@ const App: React.FC = () => {
         console.log('🎨 Starting writer suggestions for chunk:', chunk.title);
         setIsGeneratingWriterSuggestions(true);
         setWriterSuggestionsStarted(true);
-        generateWriterSuggestionsInBackground(chunk, feedback);
+        generateWriterSuggestionsInBackground(chunk, feedback, new AbortController());
       }
     }
   };
 
+  // PRESERVED: Complete scene display helper
   const getCurrentDisplayScene = (): ScriptScene | null => {
     if (currentScene) {
       return currentScene;
@@ -1149,6 +1484,7 @@ const App: React.FC = () => {
     return null;
   };
 
+  // PRESERVED: Complete scene update handler
   const handleUpdateScene = async (updatedScene: ScriptScene) => {
     const processedScene = {
       ...updatedScene,
@@ -1180,7 +1516,8 @@ const App: React.FC = () => {
         setShowWriterSuggestions(false);
         setWriterSuggestionsStarted(false);
         
-        await handleSingleSceneFeedback(processedScene, mentor);
+        const abortController = new AbortController();
+        await handleSingleSceneFeedback(processedScene, mentor, abortController);
       }
     }
     
@@ -1188,6 +1525,7 @@ const App: React.FC = () => {
     setDiffLines([]);
   };
 
+  // PRESERVED: Complete rewrite generation handler
   const handleGenerateRewrite = async () => {
     const displayScene = getCurrentDisplayScene();
     if (!displayScene || !feedback) return;
@@ -1222,6 +1560,7 @@ const App: React.FC = () => {
     }
   };
 
+  // PRESERVED: Complete character note handler
   const handleAddCharacterNote = (character: string, note: string) => {
     const updatedCharacters = { ...characters };
     
@@ -1240,6 +1579,7 @@ const App: React.FC = () => {
     setCharacters(normalizedCharacters);
   };
   
+  // PRESERVED: Complete mentor selection logic
   const selectedMentor = selectedMentorId === 'blended' 
     ? { 
         id: 'blended', 
@@ -1247,14 +1587,18 @@ const App: React.FC = () => {
         tone: 'Mixed styles',
         styleNotes: 'Combined insights from multiple mentors',
         avatar: 'https://images.pexels.com/photos/7102/notes-macbook-study-conference.jpg?auto=compress&cs=tinysrgb&w=600',
-        accent: '#8b5cf6'
+        accent: '#8b5cf6',
+        mantra: 'Multiple perspectives reveal the full picture.',
+        feedbackStyle: 'analytical' as const,
+        priorities: ['multi-perspective-analysis'],
+        analysisApproach: 'blended'
       }
     : mentors.find(m => m.id === selectedMentorId) || mentors[0];
 
   const displayScene = getCurrentDisplayScene();
   const isChunkedScript = currentScript && currentScript.chunks.length > 1;
 
-  // FIXED: Updated WriterSuggestionsButton to work with blended feedback
+  // PRESERVED: Complete WriterSuggestionsButton with blended feedback support + token awareness
   const WriterSuggestionsButton = () => {
     const currentFeedback = feedback || partialFeedback;
     if (!currentFeedback || !displayScene) return null;
@@ -1293,34 +1637,44 @@ const App: React.FC = () => {
             </div>
           </div>
           
-          <button
-            onClick={handleShowWriterSuggestions}
-            disabled={isGeneratingWriterSuggestions}
-            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
-              isGeneratingWriterSuggestions
-                ? 'bg-slate-600 text-slate-400 cursor-not-allowed'
-                : writerSuggestionsReady
-                  ? 'bg-green-600 hover:bg-green-500 text-white animate-pulse'
-                  : 'bg-yellow-600 hover:bg-yellow-500 text-white'
-            }`}
-          >
-            {isGeneratingWriterSuggestions ? (
-              <>
-                <div className="w-4 h-4 border-2 border-slate-400 border-t-transparent rounded-full animate-spin"></div>
-                Preparing...
-              </>
-            ) : writerSuggestionsReady ? (
-              <>
-                <Sparkles className="h-4 w-4" />
-                View Suggestions
-              </>
-            ) : (
-              <>
-                <div className="w-4 h-4 border-2 border-yellow-300 border-t-transparent rounded-full animate-spin"></div>
-                Preparing...
-              </>
+          <div className="flex flex-col items-end gap-2">
+            <button
+              onClick={handleShowWriterSuggestions}
+              disabled={isGeneratingWriterSuggestions}
+              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                isGeneratingWriterSuggestions
+                  ? 'bg-slate-600 text-slate-400 cursor-not-allowed'
+                  : writerSuggestionsReady
+                    ? 'bg-green-600 hover:bg-green-500 text-white animate-pulse'
+                    : 'bg-yellow-600 hover:bg-yellow-500 text-white'
+              }`}
+            >
+              {isGeneratingWriterSuggestions ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-slate-400 border-t-transparent rounded-full animate-spin"></div>
+                  Preparing...
+                </>
+              ) : writerSuggestionsReady ? (
+                <>
+                  <Sparkles className="h-4 w-4" />
+                  View Suggestions
+                </>
+              ) : (
+                <>
+                  <div className="w-4 h-4 border-2 border-yellow-300 border-t-transparent rounded-full animate-spin"></div>
+                  Preparing...
+                </>
+              )}
+            </button>
+            
+            {/* NEW: Token cost preview for writer suggestions */}
+            {session?.user && (
+              <TokenCostPreview 
+                actionType="writer_agent"
+                className="text-xs text-slate-400"
+              />
             )}
-          </button>
+          </div>
         </div>
         
         {writerSuggestionsReady && (
@@ -1337,7 +1691,7 @@ const App: React.FC = () => {
     );
   };
 
-  // Enhanced Script Workspace render function
+  // PRESERVED: Complete Enhanced Script Workspace render function
   const renderScriptWorkspace = () => {
     if (!displayScene) return null;
 
@@ -1450,9 +1804,7 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-900 text-white">
-      {/* 🎯 UNIFIED PROGRESSIVE PROCESSING PROGRESS - Used for ALL feedback types */}
-      {/* REMOVED: LoadingOverlay, ChunkProcessingProgress, ProcessingProgress */}
-      {/* UNIFIED: Single progress component for consistent user experience */}
+      {/* PRESERVED: UNIFIED PROGRESSIVE PROCESSING PROGRESS - Used for ALL feedback types */}
       {showProgressiveProgress && progressiveProgress && (
         <ProgressiveProcessingProgress
           progress={progressiveProgress}
@@ -1461,7 +1813,7 @@ const App: React.FC = () => {
         />
       )}
       
-      {/* SIMPLIFIED: Only showing simple script loading state when not generating feedback */}
+      {/* PRESERVED: SIMPLIFIED script loading state when not generating feedback */}
       {isLoadingScript && !isGeneratingFeedback && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-slate-800 p-6 rounded-lg flex flex-col items-center gap-4">
@@ -1475,6 +1827,7 @@ const App: React.FC = () => {
       )}
       
       <main className="container-fluid mx-auto px-4 py-8 max-w-[2400px]">
+        {/* ENHANCED: Header with complete token integration */}
         <div className="mb-8 flex justify-between items-center">
           <div className="flex flex-col">
             <h2 className="text-2xl font-bold flex items-center gap-2">
@@ -1483,13 +1836,32 @@ const App: React.FC = () => {
               {isChunkedScript && (
                 <span className="bg-purple-600/20 text-purple-400 px-2 py-1 rounded-full text-xs font-medium border border-purple-500/30 ml-2">
                   <Layers className="h-3 w-3 inline mr-1" />
-                  Unified Progressive Analysis
+                  Token-Integrated Progressive Analysis
                 </span>
               )}
             </h2>
           </div>
           
           <div className="flex items-center gap-4">
+            {/* NEW: Enhanced Token Display */}
+            {session?.user && (
+              <div className="flex items-center gap-3">
+                <TokenDisplay 
+                  userId={session.user.id}
+                  showDetailed={showTokenDetails}
+                  className="text-white"
+                  onTokenUpdate={setUserTokens}
+                />
+                <button
+                  onClick={() => setShowTokenDetails(!showTokenDetails)}
+                  className="text-slate-300 hover:text-white transition-colors"
+                  title="Toggle detailed token view"
+                >
+                  <BarChart3 className="h-4 w-4" />
+                </button>
+              </div>
+            )}
+            
             <LibraryButton 
               showLibrary={showLibrary} 
               onToggle={handleToggleLibrary} 
@@ -1504,8 +1876,35 @@ const App: React.FC = () => {
             </button>
           </div>
         </div>
+
+        {/* NEW: Token Error Display */}
+        {tokenError && (
+          <div className="mb-6">
+            <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 flex items-center gap-2">
+              <AlertCircle className="h-4 w-4 text-red-400" />
+              <span className="text-red-300 text-sm">{tokenError}</span>
+              <button
+                onClick={() => setTokenError(null)}
+                className="ml-auto text-red-400 hover:text-red-300"
+              >
+                ×
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* NEW: Detailed Token Display */}
+        {showTokenDetails && userTokens && session?.user && (
+          <div className="mb-6">
+            <TokenDisplay 
+              userId={session.user.id}
+              showDetailed={true}
+              className="bg-slate-800/50 backdrop-blur text-white"
+            />
+          </div>
+        )}
         
-        {/* Enhanced conditional rendering with proper state handling */}
+        {/* PRESERVED: Enhanced conditional rendering with proper state handling */}
         {showLibrary ? (
           <div key="script-library" className="fade-in">
             <ScriptLibrary onScriptSelected={handleScriptSelected} />
@@ -1513,13 +1912,14 @@ const App: React.FC = () => {
         ) : (
           <div key="main-content" className="fade-in">
             <div className="flex flex-col lg:flex-row gap-8 min-h-[calc(100vh-200px)]">
-                <div className="lg:w-[450px] min-w-[450px] space-y-8">
-                  <div className="sticky top-4">
-                    {/* 1. Script Uploader (stays in position 1) */}
-                    <ScriptUploader onScriptUploaded={handleScriptUploaded} />
+              <div className="lg:w-[450px] min-w-[450px] space-y-8">
+                <div className="sticky top-4">
+                  {/* PRESERVED: 1. Script Uploader (stays in position 1) */}
+                  <ScriptUploader onScriptUploaded={handleScriptUploaded} />
 
-                    {/* 2. Mentors Section (moved to position 2, removed separate h3 title) */}
-                    <div className="mt-8">
+                  {/* ENHANCED: 2. Mentors Section with token integration */}
+                  <div className="mt-8">
+                    {session?.user ? (
                       <MentorSelection
                         mentors={mentors}
                         onSelectMentor={handleSelectMentor}
@@ -1528,21 +1928,32 @@ const App: React.FC = () => {
                         feedbackMode={feedbackMode}
                         onFeedbackModeChange={handleFeedbackModeChange}
                       />
-                    </div>
+                    ) : (
+                      <div className="bg-slate-800/50 rounded-xl p-6 border border-slate-700">
+                        <div className="text-center">
+                          <Coins className="h-8 w-8 text-yellow-400 mx-auto mb-2" />
+                          <h3 className="font-semibold text-white mb-2">Sign In for AI Feedback</h3>
+                          <p className="text-slate-400 text-sm">
+                            Create an account to generate personalized screenplay feedback with our AI mentors.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
 
-                    {/* 3. Combined Script Navigation & Character Memory Panel */}
-                    <div className="mt-8">
-                      <ScriptNavigationPanel
-                        characters={characters}
-                        onAddNote={handleAddCharacterNote}
-                        chunks={currentScript?.chunks || []}
-                        selectedChunkId={selectedChunkId}
-                        onSelectChunk={handleChunkSelection}
-                        isChunkedScript={isChunkedScript}
-                      />
-                    </div>
+                  {/* PRESERVED: 3. Combined Script Navigation & Character Memory Panel */}
+                  <div className="mt-8">
+                    <ScriptNavigationPanel
+                      characters={characters}
+                      onAddNote={handleAddCharacterNote}
+                      chunks={currentScript?.chunks || []}
+                      selectedChunkId={selectedChunkId}
+                      onSelectChunk={handleChunkSelection}
+                      isChunkedScript={isChunkedScript}
+                    />
                   </div>
                 </div>
+              </div>
 
               <div className="lg:flex-1">
                 {renderScriptWorkspace()}
