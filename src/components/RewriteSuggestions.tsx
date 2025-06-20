@@ -83,7 +83,7 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
   }, [mentor, feedback, originalScene, userId]);
 
   const isBlended = feedback.mentorId === 'blended';
-  const isChunked = feedback.isChunked && feedback.chunkedFeedback;
+  const isChunked = feedback.isChunked && (feedback.chunkedFeedback || (feedback as any).chunks);
   const sceneType = 'chunkType' in originalScene ? 'chunk' : 'scene';
 
   // PRESERVED: Extract chunk feedback for chunked scripts
@@ -92,8 +92,8 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
 
     const extractChunkFeedback = () => {
       if (isChunked && selectedChunkId) {
-        // Find feedback for the selected chunk
-        const chunkedFeedback = feedback.chunkedFeedback;
+        // Find feedback for the selected chunk - handle both structure formats
+        const chunkedFeedback = feedback.chunkedFeedback || { chunks: (feedback as any).chunks };
         if (chunkedFeedback?.chunks && Array.isArray(chunkedFeedback.chunks)) {
           const chunkFeedback = chunkedFeedback.chunks.find(
             chunk => chunk.chunkId === selectedChunkId
@@ -120,7 +120,8 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
               availableChunks: chunkedFeedback.chunks?.map(c => c.chunkId) || [],
               requestedChunk: selectedChunkId,
               hasSelectedChunkId: !!selectedChunkId,
-              hasChunksArray: !!(chunkedFeedback.chunks && Array.isArray(chunkedFeedback.chunks))
+              hasChunksArray: !!(chunkedFeedback.chunks && Array.isArray(chunkedFeedback.chunks)),
+              feedbackStructure: feedback.chunkedFeedback ? 'legacy' : 'direct_chunks'
             });
             setError(errorMsg);
             setCurrentChunkFeedback(null);
