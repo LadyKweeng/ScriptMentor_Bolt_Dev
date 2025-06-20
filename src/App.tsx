@@ -2,7 +2,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from './utils/supabaseClient';
 import Auth from './components/Auth';
-import Header from './components/Header';
 import MentorSelection from './components/MentorSelection';
 import ScriptUploader from './components/ScriptUploader';
 import SceneEditor from './components/SceneEditor';
@@ -493,8 +492,6 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-900 text-white">
-      <Header />
-      
       {/* Loading Indicator */}
       {isLoadingScript && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">

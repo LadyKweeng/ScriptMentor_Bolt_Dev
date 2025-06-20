@@ -119,11 +119,13 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
 
   // Generate suggestions when we have valid data
   useEffect(() => {
-    if (currentChunkFeedback && mentor) {
-      generateWriterSuggestions();
-    } else if (currentChunkFeedback) {
-      // If we have feedback but no mentor, use a default mentor
-      generateWriterSuggestionsWithDefaultMentor();
+    if (currentChunkFeedback) {
+      if (mentor) {
+        generateWriterSuggestions();
+      } else {
+        // If we have feedback but no mentor, use a default mentor
+        generateWriterSuggestionsWithDefaultMentor();
+      }
     } else {
       setIsLoading(false);
     }

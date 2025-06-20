@@ -502,8 +502,8 @@ export class WriterAgentService {
           suggestions.push({
             id: `default-suggestion-${Date.now()}-${index}`,
             type: ['dialogue', 'structure', 'character', 'action', 'pacing'][index % 5] as any,
-            title: suggestion.note,
-            description: suggestion.note,
+            title: suggestion,
+            description: suggestion,
             reasoning: suggestion,
             priority: ['medium', 'high', 'low'][index % 3] as any
           });
