@@ -1,4 +1,4 @@
-// src/components/RewriteSuggestions.tsx - Enhanced Writer Suggestions with proper single scene support
+// src/components/RewriteSuggestions.tsx - COMPLETE FIXED version preserving ALL current features + robust error handling
 import React, { useState, useEffect } from 'react';
 import { Feedback, Mentor, ScriptScene, ScriptChunk } from '../types';
 import { 
@@ -23,11 +23,13 @@ import { writerAgentService } from '../services/writerAgentService';
 interface RewriteSuggestionsProps {
   feedback: Feedback;
   originalScene: ScriptScene | ScriptChunk;
-  mentor: Mentor;
+  mentor: Mentor; // FIXED: Make mentor required and always validate
   selectedChunkId?: string | null;
   onClose: () => void;
+  userId?: string; // NEW: Add userId for token integration
 }
 
+// PRESERVED: Complex WriterSuggestion interface from current version
 interface WriterSuggestion {
   id: string;
   type: 'dialogue' | 'action' | 'structure' | 'character' | 'pacing';
@@ -40,12 +42,19 @@ interface WriterSuggestion {
   lineReference?: string;
 }
 
+// NEW: Simple WriterSuggestion interface for API compatibility
+interface SimpleWriterSuggestion {
+  note: string;
+  suggestion: string;
+}
+
 const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
   feedback,
   originalScene,
   mentor,
   selectedChunkId,
-  onClose
+  onClose,
+  userId
 }) => {
   const [suggestions, setSuggestions] = useState<WriterSuggestion[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -54,12 +63,33 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [selectedType, setSelectedType] = useState<string>('all');
 
+  // FIXED: Validate mentor prop exists at component mount
+  useEffect(() => {
+    if (!mentor) {
+      console.error('❌ RewriteSuggestions: No mentor provided');
+      setError('Mentor configuration is missing. Please select a mentor and try again.');
+      setIsLoading(false);
+      return;
+    }
+
+    console.log('✅ RewriteSuggestions initialized with mentor:', {
+      mentorId: mentor.id,
+      mentorName: mentor.name,
+      mentorAccent: mentor.accent,
+      feedbackId: feedback.id,
+      sceneId: originalScene.id,
+      hasUserId: !!userId
+    });
+  }, [mentor, feedback, originalScene, userId]);
+
   const isBlended = feedback.mentorId === 'blended';
   const isChunked = feedback.isChunked && feedback.chunkedFeedback;
   const sceneType = 'chunkType' in originalScene ? 'chunk' : 'scene';
 
-  // Extract chunk feedback for chunked scripts
+  // PRESERVED: Extract chunk feedback for chunked scripts
   useEffect(() => {
+    if (!mentor) return; // Skip if no mentor
+
     const extractChunkFeedback = () => {
       if (isChunked && selectedChunkId) {
         // Find feedback for the selected chunk
@@ -114,7 +144,7 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
     };
 
     extractChunkFeedback();
-  }, [feedback, selectedChunkId, isChunked]);
+  }, [feedback, selectedChunkId, isChunked, mentor]);
 
   // Generate suggestions when we have valid data
   useEffect(() => {
@@ -126,6 +156,7 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
   }, [currentChunkFeedback, mentor, originalScene.id]);
 
   const generateWriterSuggestions = async () => {
+    // FIXED: Always validate mentor exists
     if (!mentor) {
       console.error('❌ No mentor available');
       setError('Mentor not available');
@@ -160,24 +191,56 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
         chunkId: selectedChunkId || 'single-scene',
         isBlended: feedback.mentorId === 'blended',
         feedbackLength: feedbackText.length,
-        sceneType
+        sceneType,
+        hasUserId: !!userId
       });
+
+      let response;
+
+      // FIXED: Use the correct API based on whether we have userId for token integration
+      if (userId) {
+        // Use token-aware API
+        const tokenResponse = await writerAgentService.generateWriterSuggestions({
+          userId: userId,
+          feedback: currentChunkFeedback,
+          mentor: mentor,
+          actionType: 'writer_agent',
+          scriptId: originalScene.id
+        });
+
+        if (!tokenResponse.success) {
+          throw new Error(tokenResponse.error || 'Writer suggestions generation failed');
+        }
+
+        response = tokenResponse.suggestions;
+      } else {
+        // Use legacy API for backward compatibility
+        response = await writerAgentService.generateWriterSuggestionsLegacy(
+          currentChunkFeedback, 
+          mentor
+        );
+      }
+
+      // FIXED: Handle both simple and complex suggestion formats
+      const processedSuggestions = await processApiResponse(response, feedbackText);
+      setSuggestions(processedSuggestions);
       
-      const response = await writerAgentService.generateWriterSuggestions(currentChunkFeedback, mentor);
-      
-      setSuggestions(response.suggestions || []);
       console.log('✅ Enhanced Writer suggestions loaded:', {
-        suggestionsCount: response.suggestions?.length || 0,
+        suggestionsCount: processedSuggestions.length,
         mentor: mentor.name,
-        types: response.suggestions?.map(s => s.type) || []
+        types: processedSuggestions.map(s => s.type),
+        source: userId ? 'token-aware' : 'legacy'
       });
+
     } catch (err) {
       console.error('❌ Failed to generate writer suggestions:', err);
       
       let errorMessage = 'Failed to generate writer suggestions. Please try again.';
       
       if (err instanceof Error) {
-        if (err.message.includes('blended')) {
+        if (err.message.includes('token')) {
+          errorMessage = 'Insufficient tokens for writer suggestions. Please check your token balance.';
+        } else if (err.message.includes('blended')) {
           errorMessage = 'Blended feedback processing failed. Try refreshing or selecting a single mentor.';
         } else if (err.message.includes('mentor')) {
           errorMessage = 'Mentor configuration issue. Please refresh and try again.';
@@ -190,6 +253,59 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
     } finally {
       setIsLoading(false);
     }
+  };
+
+  // NEW: Process API response to handle both simple and complex formats
+  const processApiResponse = async (response: any, feedbackText: string): Promise<WriterSuggestion[]> => {
+    const suggestions = response.suggestions || [];
+    
+    // If we get simple format suggestions, convert them to complex format
+    if (suggestions.length > 0 && suggestions[0].note && suggestions[0].suggestion) {
+      return convertSimpleToComplexSuggestions(suggestions as SimpleWriterSuggestion[], feedbackText);
+    }
+    
+    // If we already have complex format, return as-is
+    if (suggestions.length > 0 && suggestions[0].id && suggestions[0].type) {
+      return suggestions as WriterSuggestion[];
+    }
+    
+    // If no suggestions or unknown format, return empty array
+    return [];
+  };
+
+  // NEW: Convert simple suggestions to complex format for UI compatibility
+  const convertSimpleToComplexSuggestions = (simpleSuggestions: SimpleWriterSuggestion[], feedbackText: string): WriterSuggestion[] => {
+    return simpleSuggestions.map((simple, index) => {
+      // Determine type based on content
+      let type: WriterSuggestion['type'] = 'structure';
+      if (simple.note.toLowerCase().includes('dialogue') || simple.suggestion.toLowerCase().includes('dialogue')) {
+        type = 'dialogue';
+      } else if (simple.note.toLowerCase().includes('action') || simple.suggestion.toLowerCase().includes('action')) {
+        type = 'action';
+      } else if (simple.note.toLowerCase().includes('character') || simple.suggestion.toLowerCase().includes('character')) {
+        type = 'character';
+      } else if (simple.note.toLowerCase().includes('pacing') || simple.suggestion.toLowerCase().includes('pacing')) {
+        type = 'pacing';
+      }
+
+      // Determine priority based on language
+      let priority: WriterSuggestion['priority'] = 'medium';
+      if (simple.suggestion.toLowerCase().includes('critical') || simple.suggestion.toLowerCase().includes('important')) {
+        priority = 'high';
+      } else if (simple.suggestion.toLowerCase().includes('minor') || simple.suggestion.toLowerCase().includes('consider')) {
+        priority = 'low';
+      }
+
+      return {
+        id: `suggestion-${index + 1}`,
+        type: type,
+        title: simple.note || `Writer Suggestion ${index + 1}`,
+        description: simple.suggestion,
+        reasoning: `${mentor.name} recommends: ${simple.suggestion}`,
+        priority: priority,
+        lineReference: `Based on feedback analysis`
+      };
+    });
   };
 
   const getFeedbackText = (feedbackObj: Feedback): string => {
@@ -253,22 +369,29 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
 
   const suggestionTypes = [...new Set(suggestions.map(s => s.type))];
 
+  // FIXED: Always check mentor exists before accessing properties
+  const mentorAccent = mentor?.accent || '#8b5cf6';
+  const mentorName = mentor?.name || 'Unknown Mentor';
+  const mentorAvatar = mentor?.avatar || '';
+
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <div className="bg-slate-800 rounded-xl w-full max-w-4xl max-h-[90vh] flex flex-col border border-slate-700 shadow-2xl">
-        {/* ENHANCED: Header with chunked-style formatting */}
+        {/* PRESERVED: Enhanced Header with mentor validation */}
         <div 
           className="p-4 sm:p-6 bg-slate-900 border-b border-slate-700 flex items-center justify-between flex-shrink-0"
-          style={{ borderBottom: `2px solid ${mentor.accent}` }}
+          style={{ borderBottom: `2px solid ${mentorAccent}` }}
         >
           {/* Left Section - Mentor & Scene Info */}
           <div className="flex items-center gap-4 min-w-0 flex-1">
-            <img
-              src={mentor.avatar}
-              alt={mentor.name}
-              className="w-10 h-10 rounded-full object-cover border-2 flex-shrink-0"
-              style={{ borderColor: mentor.accent }}
-            />
+            {mentorAvatar && (
+              <img
+                src={mentorAvatar}
+                alt={mentorName}
+                className="w-10 h-10 rounded-full object-cover border-2 flex-shrink-0"
+                style={{ borderColor: mentorAccent }}
+              />
+            )}
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 mb-1">
                 <h2 className="text-lg font-semibold text-white truncate">
@@ -288,7 +411,7 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
                 </div>
                 <div className="flex items-center gap-1">
                   <Users className="h-3 w-3" />
-                  <span>{mentor.name}</span>
+                  <span>{mentorName}</span>
                 </div>
                 {!isLoading && !error && (
                   <div className="flex items-center gap-1">
@@ -318,7 +441,7 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
                 <RefreshCw className="h-8 w-8 animate-spin text-yellow-400 mx-auto mb-4" />
                 <p className="text-white font-medium mb-2">Generating Enhanced Writer Suggestions</p>
                 <p className="text-slate-400 text-sm">
-                  {isBlended ? 'Analyzing blended mentor insights...' : `Applying ${mentor.name}'s expertise...`}
+                  {isBlended ? 'Analyzing blended mentor insights...' : `Applying ${mentorName}'s expertise...`}
                 </p>
               </div>
             </div>
@@ -346,7 +469,7 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
 
           {!isLoading && !error && suggestions.length > 0 && (
             <>
-              {/* Filter Tabs */}
+              {/* PRESERVED: Filter Tabs */}
               <div className="flex border-b border-slate-700 bg-slate-800/50 overflow-x-auto">
                 <button
                   onClick={() => setSelectedType('all')}
@@ -355,7 +478,7 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
                       ? 'text-white border-b-2'
                       : 'text-slate-400 hover:text-white'
                   }`}
-                  style={{ borderBottomColor: selectedType === 'all' ? mentor.accent : 'transparent' }}
+                  style={{ borderBottomColor: selectedType === 'all' ? mentorAccent : 'transparent' }}
                   type="button"
                 >
                   <Target className="h-4 w-4" />
@@ -371,7 +494,7 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
                         ? 'text-white border-b-2'
                         : 'text-slate-400 hover:text-white'
                     }`}
-                    style={{ borderBottomColor: selectedType === type ? mentor.accent : 'transparent' }}
+                    style={{ borderBottomColor: selectedType === type ? mentorAccent : 'transparent' }}
                     type="button"
                   >
                     {getTypeIcon(type)}
@@ -380,7 +503,7 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
                 ))}
               </div>
 
-              {/* Suggestions List */}
+              {/* PRESERVED: Sophisticated Suggestions List */}
               <div className="flex-1 overflow-y-auto">
                 <div className="p-4 space-y-4">
                   {filteredSuggestions.map((suggestion, index) => (
@@ -416,7 +539,7 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
                         </button>
                       </div>
 
-                      {/* Original vs Suggested Text */}
+                      {/* PRESERVED: Original vs Suggested Text */}
                       {suggestion.originalText && suggestion.suggestedText && (
                         <div className="space-y-3 mb-3">
                           <div>
@@ -435,7 +558,7 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
                         </div>
                       )}
 
-                      {/* Reasoning */}
+                      {/* PRESERVED: Reasoning */}
                       <div className="border-t border-slate-600/30 pt-3">
                         <p className="text-xs font-medium text-slate-400 mb-1">REASONING:</p>
                         <p className="text-slate-300 text-sm">{suggestion.reasoning}</p>
@@ -466,12 +589,12 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
           )}
         </div>
 
-        {/* Footer */}
+        {/* PRESERVED: Footer */}
         {!isLoading && !error && suggestions.length > 0 && (
           <div className="p-4 bg-slate-900 border-t border-slate-700 text-xs text-slate-400">
             <div className="flex items-center justify-between">
               <span>
-                Enhanced writer suggestions • {isBlended ? 'Blended mentor insights' : `${mentor.name}'s expertise`}
+                Enhanced writer suggestions • {isBlended ? 'Blended mentor insights' : `${mentorName}'s expertise`}
               </span>
               <span>
                 Generated: {new Date().toLocaleString()}

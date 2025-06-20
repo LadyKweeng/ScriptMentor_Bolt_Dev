@@ -955,50 +955,98 @@ if (session?.user) {
     }
   };
 
-  // ENHANCED: Writer suggestions with token integration
-  const handleShowWriterSuggestions = async () => {
-    console.log('👀 User requested writer suggestions display with token validation');
+  // FIXED: Enhanced writer suggestions handler with proper mentor validation and token integration
+const handleShowWriterSuggestions = async () => {
+  try {
+    // FIXED: Validate we have the required data
+    if (!feedback && !partialFeedback) {
+      console.error('❌ No feedback available for writer suggestions');
+      return;
+    }
 
-    try {
-      // NEW: Token-aware writer agent if we have feedback and user is authenticated
-      if (feedback && !writerSuggestions && session?.user) {
-        const selectedMentor = mentors.find(m => m.id === feedback.mentorId) || {
-          id: feedback.mentorId,
-          name: feedback.mentorId === 'blended' ? 'Blended Mentors' : 'Unknown Mentor',
+    if (!session?.user?.id) {
+      console.error('❌ No user session for writer suggestions');
+      return;
+    }
+
+    // FIXED: Ensure we have a proper selectedMentor
+    const currentFeedback = feedback || partialFeedback!;
+    let mentorForSuggestions = selectedMentor;
+
+    // FIXED: Create a fallback mentor if selectedMentor is undefined
+    if (!mentorForSuggestions) {
+      console.warn('⚠️ No selectedMentor found, creating fallback mentor');
+      
+      if (currentFeedback.mentorId === 'blended') {
+        mentorForSuggestions = {
+          id: 'blended',
+          name: 'Blended Mentors',
           tone: 'analytical',
-          styleNotes: 'AI generated feedback',
+          styleNotes: 'AI generated blended feedback',
           avatar: '',
           accent: '#8b5cf6',
-          mantra: 'Focus on the craft.',
+          mantra: 'Multiple perspectives reveal the full picture.',
           feedbackStyle: 'analytical' as const,
-          priorities: ['clarity'],
-          analysisApproach: 'systematic'
+          priorities: ['clarity', 'structure'],
+          analysisApproach: 'comprehensive'
         };
-
-        const result = await writerAgentService.generateWriterSuggestions({
-          userId: session.user.id,
-          feedback: feedback,
-          mentor: selectedMentor,
-          actionType: 'writer_agent',
-          scriptId: currentScript?.id || currentScene?.id
-        });
-
-        if (result.success) {
-          setWriterSuggestions(result.suggestions);
-          refreshTokenDisplay();
+      } else {
+        // Try to find the mentor from the feedback
+        const mentorFromData = mentors.find(m => m.id === currentFeedback.mentorId);
+        if (mentorFromData) {
+          mentorForSuggestions = mentorFromData;
         } else {
-          handleTokenError(result.error || 'Writer suggestions generation failed', 'writer_agent');
-          // Still show the UI even if token-aware generation fails
+          // Last resort: create a generic mentor
+          mentorForSuggestions = {
+            id: currentFeedback.mentorId || 'generic',
+            name: 'Script Mentor',
+            tone: 'analytical',
+            styleNotes: 'AI generated feedback',
+            avatar: '',
+            accent: '#8b5cf6',
+            mantra: 'Focus on the craft.',
+            feedbackStyle: 'analytical' as const,
+            priorities: ['clarity'],
+            analysisApproach: 'systematic'
+          };
         }
       }
-
-      setShowWriterSuggestions(true);
-    } catch (error) {
-      console.error('❌ Error in writer suggestions:', error);
-      // Still show the UI even on error
-      setShowWriterSuggestions(true);
     }
-  };
+
+    console.log('✍️ Opening writer suggestions with validated mentor:', {
+      mentorId: mentorForSuggestions.id,
+      mentorName: mentorForSuggestions.name,
+      feedbackId: currentFeedback.id,
+      userId: session.user.id
+    });
+
+    // FIXED: Pre-validate tokens before opening the UI (optional - for better UX)
+    if (tokenService) {
+      try {
+        const tokenValidation = await writerAgentService.validateTokensForWriterAgent(session.user.id);
+        if (!tokenValidation.canProceed) {
+          handleTokenError(
+            `Insufficient tokens for Writer Agent. Need ${tokenValidation.cost}, have ${tokenValidation.currentBalance}`,
+            'writer_agent'
+          );
+          return;
+        }
+      } catch (error) {
+        console.warn('⚠️ Token validation failed, proceeding anyway:', error);
+        // Continue anyway - the component will handle token errors
+      }
+    }
+
+    // Set the mentor and show the suggestions
+    setSelectedMentorId(mentorForSuggestions.id);
+    setShowWriterSuggestions(true);
+
+  } catch (error) {
+    console.error('❌ Error in writer suggestions:', error);
+    // Still show the UI even on error - let the component handle it
+    setShowWriterSuggestions(true);
+  }
+};
   
   // PRESERVED: Complete feedback mode change handler
   const handleFeedbackModeChange = async (mode: FeedbackMode) => {
@@ -1748,6 +1796,50 @@ if (session?.user) {
     setDiffLines([]);
   };
 
+  // FIXED: Add this near your other utility functions
+  const ensureMentorAvailable = (feedbackObj: Feedback) => {
+    // Try to get the mentor from the current selection first
+    if (selectedMentor && selectedMentor.id === feedbackObj.mentorId) {
+      return selectedMentor;
+    }
+
+    // Try to find the mentor from the mentors data
+    const mentorFromData = mentors.find(m => m.id === feedbackObj.mentorId);
+    if (mentorFromData) {
+      return mentorFromData;
+    }
+
+    // Create a fallback mentor based on feedback
+    if (feedbackObj.mentorId === 'blended') {
+      return {
+        id: 'blended',
+        name: 'Blended Mentors',
+        tone: 'analytical',
+        styleNotes: 'AI generated blended feedback',
+        avatar: '',
+        accent: '#8b5cf6',
+        mantra: 'Multiple perspectives reveal the full picture.',
+        feedbackStyle: 'analytical' as const,
+        priorities: ['clarity', 'structure'],
+        analysisApproach: 'comprehensive'
+      };
+    }
+
+    // Generic fallback
+    return {
+      id: feedbackObj.mentorId || 'generic',
+      name: 'Script Mentor',
+      tone: 'analytical',
+      styleNotes: 'AI generated feedback',
+      avatar: '',
+      accent: '#8b5cf6',
+      mantra: 'Focus on the craft.',
+      feedbackStyle: 'analytical' as const,
+      priorities: ['clarity'],
+      analysisApproach: 'systematic'
+    };
+  };
+
   // PRESERVED: Complete rewrite generation handler
   const handleGenerateRewrite = async () => {
     const displayScene = getCurrentDisplayScene();
@@ -1863,14 +1955,13 @@ if (session?.user) {
           <div className="flex flex-col items-end gap-2">
             <button
               onClick={handleShowWriterSuggestions}
-              disabled={isGeneratingWriterSuggestions}
-              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
-                isGeneratingWriterSuggestions
+              disabled={isGeneratingWriterSuggestions || !selectedMentor}
+              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${isGeneratingWriterSuggestions || !selectedMentor
                   ? 'bg-slate-600 text-slate-400 cursor-not-allowed'
                   : writerSuggestionsReady
                     ? 'bg-green-600 hover:bg-green-500 text-white animate-pulse'
                     : 'bg-yellow-600 hover:bg-yellow-500 text-white'
-              }`}
+                }`}
             >
               {isGeneratingWriterSuggestions ? (
                 <>
@@ -2010,14 +2101,15 @@ if (session?.user) {
           )}
         </div>
         
-        {/* FIXED: Pass selectedMentor prop to RewriteSuggestions */}
-        {showWriterSuggestions && (feedback || partialFeedback) && displayScene && (
+        {/* FIXED: Pass all required props to RewriteSuggestions including mentor validation */}
+        {showWriterSuggestions && (feedback || partialFeedback) && displayScene && selectedMentor && (
           <div className="mt-6">
             <RewriteSuggestions
               originalScene={displayScene}
               feedback={feedback || partialFeedback!}
-              mentor={selectedMentor}
+              mentor={selectedMentor} // FIXED: Ensure mentor is always provided
               selectedChunkId={selectedChunkId}
+              userId={session?.user?.id} // NEW: Pass userId for token integration
               onClose={() => setShowWriterSuggestions(false)}
             />
           </div>
