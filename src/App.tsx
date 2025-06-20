@@ -2016,6 +2016,7 @@ if (session?.user) {
             <RewriteSuggestions
               originalScene={displayScene}
               feedback={feedback || partialFeedback!}
+              mentor={selectedMentor}  // <-- ADD THIS LINE
               selectedChunkId={selectedChunkId}
               onClose={() => setShowWriterSuggestions(false)}
             />
@@ -2172,7 +2173,7 @@ if (session?.user) {
                       chunks={currentScript?.chunks || []}
                       selectedChunkId={selectedChunkId}
                       onSelectChunk={handleChunkSelection}
-                      isChunkedScript={isChunkedScript}
+                      isChunkedScript={isChunkedScript ?? undefined}
                     />
                   </div>
                 </div>

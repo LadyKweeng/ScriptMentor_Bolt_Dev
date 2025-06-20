@@ -1056,7 +1056,8 @@ export class ProgressiveFeedbackService {
   }
 
   /**
-   * Generate summary for blended feedback
+   * Generate AI-powered summary for blended feedback
+   * ENHANCED: Now generates actual AI content instead of templates
    */
   private async generateBlendedSummary(
     chunks: ScriptChunk[],
@@ -1073,30 +1074,187 @@ export class ProgressiveFeedbackService {
 
     const mentorNames = mentors.map(m => m.name).join(', ');
 
+    // NEW: Try to generate AI-powered summary if we have successful chunks
+    if (successfulChunks.length > 0) {
+      try {
+        const aiSummary = await this.generateAIBlendedSummary(successfulChunks, mentors);
+        if (aiSummary) {
+          return {
+            overallStructure: aiSummary.overallStructure,
+            keyStrengths: aiSummary.keyStrengths,
+            majorIssues: [
+              ...aiSummary.majorIssues,
+              ...(failedChunks.length > 0 ? [`${failedChunks.length} sections could not complete blended analysis`] : [])
+            ],
+            globalRecommendations: aiSummary.globalRecommendations
+          };
+        }
+      } catch (error) {
+        console.warn('⚠️ AI summary generation failed, falling back to template:', error);
+      }
+    }
+
+    // FALLBACK: Template-based summary (existing logic)
     return {
       overallStructure: `Blended analysis from ${mentors.length} mentors (${mentorNames}) across ${chunks.length} sections via backend API. ${successfulChunks.length}/${chunks.length} sections successfully analyzed with multi-perspective insights.`,
-
       keyStrengths: [
         `Multi-mentor perspective combining: ${mentorNames}`,
         'Comprehensive analysis from different industry expertise areas via backend API',
         'Balanced feedback addressing multiple aspects of storytelling',
         ...(successfulChunks.length > 0 ? [`${successfulChunks.length} sections benefit from blended insights`] : [])
       ],
-
       majorIssues: [
         ...(failedChunks.length > 0 ? [`${failedChunks.length} sections could not complete blended analysis`] : []),
-        ...(successfulChunks.length === 0 ? ['All sections encountered blending issues - try individual mentor analysis'] : [])
+        ...(successfulChunks.length === 0 ? ['No sections completed successfully - manual review required'] : [])
       ],
-
       globalRecommendations: [
-        'Review blended feedback for consensus recommendations',
-        'Consider individual mentor analysis for sections that failed blending',
-        'Use blended insights to identify areas where mentors agree or disagree',
-        'Apply different mentor perspectives to different script elements',
-        'Progressive blended analysis provides comprehensive script evaluation via backend API'
+        'Review individual section feedback for specific improvements',
+        'Consider the consensus points from multiple mentoring perspectives',
+        'Focus on areas where multiple mentors agree on issues',
+        'Leverage the diverse viewpoints for comprehensive script development'
       ]
     };
   }
+  /**
+ * NEW: Generate AI-powered blended summary from successful chunks
+ */
+private async generateAIBlendedSummary(
+  successfulChunks: ChunkFeedback[], 
+  mentors: Mentor[]
+): Promise<{
+  overallStructure: string;
+  keyStrengths: string[];
+  majorIssues: string[];
+  globalRecommendations: string[];
+} | null> {
+  try {
+    console.log('🤖 Generating AI-powered blended summary from', successfulChunks.length, 'chunks');
+
+    // Combine all feedback content for analysis
+    const combinedFeedback = successfulChunks.map(chunk => {
+      return `=== ${chunk.chunkTitle} ===\n` +
+             `STRUCTURED: ${chunk.structuredContent}\n` +
+             `SCRATCHPAD: ${chunk.scratchpadContent}\n`;
+    }).join('\n\n');
+
+    const mentorNames = mentors.map(m => m.name).join(', ');
+
+    // Create AI prompt for summary generation
+    const summaryPrompt = `You are analyzing blended feedback from multiple screenplay mentors (${mentorNames}) across ${successfulChunks.length} script sections. 
+
+COMBINED FEEDBACK TO ANALYZE:
+${combinedFeedback}
+
+Generate a comprehensive script overview that synthesizes insights from all mentors and sections. Focus on:
+1. Overall structural assessment across all sections
+2. Consensus strengths that multiple mentors/sections highlight
+3. Common issues that appear across sections
+4. Global recommendations that address script-wide patterns
+
+Provide your analysis in JSON format:
+{
+  "overallStructure": "2-3 sentence assessment of the script's overall structural integrity, dramatic flow, and narrative effectiveness based on the blended analysis",
+  "keyStrengths": ["strength 1", "strength 2", "strength 3"],
+  "majorIssues": ["issue 1", "issue 2", "issue 3"],
+  "globalRecommendations": ["recommendation 1", "recommendation 2", "recommendation 3", "recommendation 4"]
+}
+
+Make this sound like genuine professional feedback, not template text. Focus on the actual content analyzed.`;
+
+    // Try to call AI service for summary generation
+    const summaryResponse = await this.callAIForSummary(summaryPrompt);
+    
+    if (summaryResponse) {
+      console.log('✅ AI-generated blended summary created successfully');
+      return summaryResponse;
+    }
+
+    return null;
+  } catch (error) {
+    console.error('❌ AI summary generation failed:', error);
+    return null;
+  }
+}
+
+/**
+ * NEW: Call AI service for summary generation
+ */
+private async callAIForSummary(prompt: string): Promise<{
+  overallStructure: string;
+  keyStrengths: string[];
+  majorIssues: string[];
+  globalRecommendations: string[];
+} | null> {
+  try {
+    // Try using the backend API service first
+    try {
+      const response = await backendApiService.generateAnalysis({
+        prompt,
+        analysisType: 'summary',
+        model: 'gpt-4o-mini',
+        temperature: 0.3
+      });
+      
+      if (response && typeof response === 'string') {
+        const parsed = JSON.parse(response);
+        return {
+          overallStructure: parsed.overallStructure || '',
+          keyStrengths: Array.isArray(parsed.keyStrengths) ? parsed.keyStrengths : [],
+          majorIssues: Array.isArray(parsed.majorIssues) ? parsed.majorIssues : [],
+          globalRecommendations: Array.isArray(parsed.globalRecommendations) ? parsed.globalRecommendations : []
+        };
+      }
+    } catch (backendError) {
+      console.warn('Backend API not available for summary generation, trying direct approach');
+    }
+
+    // Fallback: Direct OpenAI call (if environment supports it)
+    if (typeof window === 'undefined' && process.env.OPENAI_API_KEY) {
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: 'You are an expert screenplay analyst who creates comprehensive script overviews from detailed feedback analysis.'
+            },
+            {
+              role: 'user',
+              content: prompt
+            }
+          ],
+          temperature: 0.3,
+          response_format: { type: 'json_object' }
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const content = data.choices?.[0]?.message?.content;
+
+        if (content) {
+          const parsed = JSON.parse(content);
+          return {
+            overallStructure: parsed.overallStructure || '',
+            keyStrengths: Array.isArray(parsed.keyStrengths) ? parsed.keyStrengths : [],
+            majorIssues: Array.isArray(parsed.majorIssues) ? parsed.majorIssues : [],
+            globalRecommendations: Array.isArray(parsed.globalRecommendations) ? parsed.globalRecommendations : []
+          };
+        }
+      }
+    }
+
+    return null;
+  } catch (error) {
+    console.error('❌ AI summary API call failed:', error);
+    return null;
+  }
+}
 }
 
 // Export singleton instance
