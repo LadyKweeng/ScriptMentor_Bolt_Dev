@@ -2010,7 +2010,7 @@ if (session?.user) {
           )}
         </div>
         
-        {/* FIXED: Pass selectedMentor to RewriteSuggestions for proper mentor support */}
+        {/* Pass selectedChunkId to RewriteSuggestions for proper chunk support */}
         {showWriterSuggestions && (feedback || partialFeedback) && displayScene && (
           <div className="mt-6">
             <RewriteSuggestions
