@@ -52,6 +52,7 @@ class BackendApiService {
   /**
    * PRESERVED: Generate feedback with optional cancellation support
    * ENHANCED: Now supports AbortSignal while preserving all original functionality
+   * IMPROVED: Added rate limit detection and automatic retry with exponential backoff
    */
   async generateFeedback(
     request: BackendFeedbackRequest, 
@@ -87,31 +88,131 @@ class BackendApiService {
         });
       }
 
-      const response = await fetch(`${this.baseUrl}/generate-feedback`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(enhancedRequest),
-        signal: controller.signal // PRESERVED: Add abort signal to fetch
-      });
+      // IMPROVED: Add retry logic with exponential backoff
+      let retryCount = 0;
+      const maxRetries = 3;
+      let lastError: Error | null = null;
 
-      // PRESERVED: Clean up request tracking
-      this.activeRequests.delete(requestId);
+      while (retryCount <= maxRetries) {
+        try {
+          // Check if already aborted before making request
+          if (abortSignal?.aborted || controller.signal.aborted) {
+            throw new Error('Request cancelled by user');
+          }
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(`Backend API Error: ${response.status} - ${errorData.message || response.statusText}`);
+          const response = await fetch(`${this.baseUrl}/generate-feedback`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(enhancedRequest),
+            signal: controller.signal // PRESERVED: Add abort signal to fetch
+          });
+
+          // PRESERVED: Clean up request tracking
+          this.activeRequests.delete(requestId);
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            const errorMessage = `Backend API Error: ${response.status} - ${errorData.message || response.statusText}`;
+            
+            // IMPROVED: Check for rate limit errors (429 status code)
+            if (response.status === 429) {
+              const rateLimitMessage = errorData.message || '';
+              const waitTimeMatch = rateLimitMessage.match(/Please try again in (\d+\.\d+)s/);
+              
+              if (waitTimeMatch && waitTimeMatch[1]) {
+                const waitTime = parseFloat(waitTimeMatch[1]) * 1000 + 1000; // Convert to ms and add 1 second buffer
+                console.log(`🕒 Rate limit hit, waiting for ${waitTime/1000} seconds before retry...`);
+                
+                // Wait for the specified time plus 1 second
+                await new Promise(resolve => setTimeout(resolve, waitTime));
+                
+                // Increment retry count and try again
+                retryCount++;
+                continue;
+              }
+            }
+            
+            throw new Error(errorMessage);
+          }
+
+          const data: BackendFeedbackResponse = await response.json();
+          
+          if (!data.success) {
+            throw new Error(data.error || 'Feedback generation failed');
+          }
+
+          console.log('✅ Received formatted feedback from backend');
+          return data.feedback;
+        } catch (error) {
+          // Store the error for potential re-throw
+          lastError = error instanceof Error ? error : new Error(String(error));
+          
+          // PRESERVED: Handle abort errors specifically
+          if (error instanceof Error && error.name === 'AbortError') {
+            console.log('🛑 Backend request was cancelled');
+            throw new Error('Request cancelled by user');
+          }
+          
+          // IMPROVED: Handle rate limit errors from error message
+          if (error instanceof Error && 
+              (error.message.includes('rate limit') || 
+               error.message.includes('429') || 
+               error.message.includes('try again in'))) {
+            
+            // Extract wait time if available
+            const waitTimeMatch = error.message.match(/try again in (\d+\.\d+)s/);
+            let waitTime = Math.pow(2, retryCount) * 1000; // Default exponential backoff
+            
+            if (waitTimeMatch && waitTimeMatch[1]) {
+              waitTime = parseFloat(waitTimeMatch[1]) * 1000 + 1000; // Convert to ms and add 1 second buffer
+            }
+            
+            console.log(`🕒 Rate limit detected, waiting for ${waitTime/1000} seconds before retry...`);
+            
+            // Check if already aborted before waiting
+            if (abortSignal?.aborted || controller.signal.aborted) {
+              throw new Error('Request cancelled by user during rate limit wait');
+            }
+            
+            // Wait for the specified time
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+            
+            // Increment retry count and try again
+            retryCount++;
+            continue;
+          }
+          
+          // If we've reached max retries or it's not a rate limit error, throw
+          if (retryCount >= maxRetries || 
+              !(lastError.message.includes('rate limit') || 
+                lastError.message.includes('429') || 
+                lastError.message.includes('try again in'))) {
+            throw lastError;
+          }
+          
+          // Otherwise, use exponential backoff
+          const backoffTime = Math.pow(2, retryCount) * 1000;
+          console.log(`⏱️ Retrying after ${backoffTime/1000} seconds (attempt ${retryCount + 1}/${maxRetries + 1})...`);
+          
+          // Check if already aborted before waiting
+          if (abortSignal?.aborted || controller.signal.aborted) {
+            throw new Error('Request cancelled by user during backoff wait');
+          }
+          
+          await new Promise(resolve => setTimeout(resolve, backoffTime));
+          retryCount++;
+        }
       }
-
-      const data: BackendFeedbackResponse = await response.json();
       
-      if (!data.success) {
-        throw new Error(data.error || 'Feedback generation failed');
+      // If we've exhausted all retries, throw the last error
+      if (lastError) {
+        throw lastError;
       }
-
-      console.log('✅ Received formatted feedback from backend');
-      return data.feedback;
+      
+      // This should never be reached, but TypeScript requires a return
+      throw new Error('Unexpected error in generateFeedback');
 
     } catch (error) {
       // PRESERVED: Handle abort errors specifically
@@ -332,6 +433,7 @@ Come on... just write something.`,
 
   /**
    * NEW: Enhanced request method for token-aware operations
+   * IMPROVED: Added rate limit detection and automatic retry
    */
   async makeRequest<T = any>(
     endpoint: string, 
@@ -363,68 +465,147 @@ Come on... just write something.`,
       signal: options.signal || AbortSignal.timeout(60000)
     };
 
-    try {
-      console.log(`🌐 Making API request to ${endpoint}`, {
-        method: requestOptions.method || 'GET',
-        hasBody: !!requestOptions.body,
-        hasTokenInfo: !!tokenInfo
-      });
+    // IMPROVED: Add retry logic with exponential backoff
+    let retryCount = 0;
+    const maxRetries = 3;
+    let lastError: Error | null = null;
 
-      const response = await fetch(url, requestOptions);
-      
-      if (!response.ok) {
-        let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+    while (retryCount <= maxRetries) {
+      try {
+        console.log(`🌐 Making API request to ${endpoint}${retryCount > 0 ? ` (retry ${retryCount}/${maxRetries})` : ''}`, {
+          method: requestOptions.method || 'GET',
+          hasBody: !!requestOptions.body,
+          hasTokenInfo: !!tokenInfo
+        });
+
+        const response = await fetch(url, requestOptions);
         
-        try {
-          const errorBody = await response.text();
-          if (errorBody) {
-            const errorData = JSON.parse(errorBody);
-            errorMessage = errorData.error || errorMessage;
+        if (!response.ok) {
+          let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+          
+          try {
+            const errorBody = await response.text();
+            if (errorBody) {
+              const errorData = JSON.parse(errorBody);
+              errorMessage = errorData.error || errorMessage;
+            }
+          } catch {
+            // If we can't parse the error body, use the default message
           }
-        } catch {
-          // If we can't parse the error body, use the default message
+          
+          // IMPROVED: Check for rate limit errors (429 status code)
+          if (response.status === 429) {
+            const waitTimeMatch = errorMessage.match(/try again in (\d+\.\d+)s/);
+            let waitTime = Math.pow(2, retryCount) * 1000; // Default exponential backoff
+            
+            if (waitTimeMatch && waitTimeMatch[1]) {
+              waitTime = parseFloat(waitTimeMatch[1]) * 1000 + 1000; // Convert to ms and add 1 second buffer
+            }
+            
+            console.log(`🕒 Rate limit hit, waiting for ${waitTime/1000} seconds before retry...`);
+            
+            // Check if already aborted before waiting
+            if (requestOptions.signal && (requestOptions.signal as AbortSignal).aborted) {
+              throw new Error('Request cancelled by user during rate limit wait');
+            }
+            
+            // Wait for the specified time
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+            
+            // Increment retry count and try again
+            retryCount++;
+            continue;
+          }
+          
+          throw new Error(errorMessage);
         }
+
+        const data = await response.json();
         
-        throw new Error(errorMessage);
-      }
+        console.log(`✅ API request successful`, {
+          endpoint,
+          hasData: !!data,
+          hasUsage: !!data.usage
+        });
 
-      const data = await response.json();
-      
-      console.log(`✅ API request successful`, {
-        endpoint,
-        hasData: !!data,
-        hasUsage: !!data.usage
-      });
+        return {
+          success: true,
+          data: data.data || data,
+          usage: data.usage,
+          timestamp: data.timestamp || new Date().toISOString()
+        };
 
-      return {
-        success: true,
-        data: data.data || data,
-        usage: data.usage,
-        timestamp: data.timestamp || new Date().toISOString()
-      };
-
-    } catch (error) {
-      console.error(`❌ API request failed for ${endpoint}:`, error);
-      
-      if (error instanceof Error) {
-        if (error.name === 'AbortError') {
+      } catch (error) {
+        // Store the error for potential re-throw
+        lastError = error instanceof Error ? error : new Error(String(error));
+        
+        console.error(`❌ API request failed for ${endpoint}:`, lastError);
+        
+        if (lastError.name === 'AbortError') {
           return {
             success: false,
             error: 'Request was cancelled or timed out'
           };
         }
         
-        return {
-          success: false,
-          error: error.message
-        };
+        // IMPROVED: Check for rate limit errors in the error message
+        if (lastError.message.includes('rate limit') || 
+            lastError.message.includes('429') || 
+            lastError.message.includes('try again in')) {
+          
+          // Extract wait time if available
+          const waitTimeMatch = lastError.message.match(/try again in (\d+\.\d+)s/);
+          let waitTime = Math.pow(2, retryCount) * 1000; // Default exponential backoff
+          
+          if (waitTimeMatch && waitTimeMatch[1]) {
+            waitTime = parseFloat(waitTimeMatch[1]) * 1000 + 1000; // Convert to ms and add 1 second buffer
+          }
+          
+          console.log(`🕒 Rate limit detected, waiting for ${waitTime/1000} seconds before retry...`);
+          
+          // Check if already aborted before waiting
+          if (requestOptions.signal && (requestOptions.signal as AbortSignal).aborted) {
+            throw new Error('Request cancelled by user during rate limit wait');
+          }
+          
+          // Wait for the specified time
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+          
+          // Increment retry count and try again
+          retryCount++;
+          continue;
+        }
+        
+        // If we've reached max retries or it's not a rate limit error, return error response
+        if (retryCount >= maxRetries || 
+            !(lastError.message.includes('rate limit') || 
+              lastError.message.includes('429') || 
+              lastError.message.includes('try again in'))) {
+          return {
+            success: false,
+            error: lastError.message
+          };
+        }
+        
+        // Otherwise, use exponential backoff
+        const backoffTime = Math.pow(2, retryCount) * 1000;
+        console.log(`⏱️ Retrying after ${backoffTime/1000} seconds (attempt ${retryCount + 1}/${maxRetries + 1})...`);
+        
+        // Check if already aborted before waiting
+        if (requestOptions.signal && (requestOptions.signal as AbortSignal).aborted) {
+          throw new Error('Request cancelled by user during backoff wait');
+        }
+        
+        await new Promise(resolve => setTimeout(resolve, backoffTime));
+        retryCount++;
       }
-
-      return {
-        success: false,
-        error: 'Unknown error occurred'
-      };
     }
+    
+    // If we've exhausted all retries, return the last error
+    return {
+      success: false,
+      error: lastError?.message || 'Request failed after multiple retries'
+    };
   }
 
   /**
@@ -675,6 +856,123 @@ Come on... just write something.`,
     // Clear health check cache when URL changes
     this.healthCheckCache = null;
     console.log(`🔗 Backend API URL updated to: ${url}`);
+  }
+
+  /**
+   * NEW: Generate analysis with specific prompt
+   */
+  async generateAnalysis(options: {
+    prompt: string;
+    analysisType: string;
+    model?: string;
+    temperature?: number;
+  }): Promise<string> {
+    try {
+      // IMPROVED: Add retry logic with exponential backoff
+      let retryCount = 0;
+      const maxRetries = 3;
+      let lastError: Error | null = null;
+
+      while (retryCount <= maxRetries) {
+        try {
+          const response = await fetch(`${this.baseUrl}/openai-analysis`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              messages: [
+                { role: 'user', content: options.prompt }
+              ],
+              model: options.model || 'gpt-4o',
+              temperature: options.temperature || 0.7,
+              max_tokens: 4000
+            })
+          });
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            const errorMessage = `Analysis API Error: ${response.status} - ${errorData.message || response.statusText}`;
+            
+            // IMPROVED: Check for rate limit errors (429 status code)
+            if (response.status === 429) {
+              const waitTimeMatch = errorMessage.match(/try again in (\d+\.\d+)s/);
+              let waitTime = Math.pow(2, retryCount) * 1000; // Default exponential backoff
+              
+              if (waitTimeMatch && waitTimeMatch[1]) {
+                waitTime = parseFloat(waitTimeMatch[1]) * 1000 + 1000; // Convert to ms and add 1 second buffer
+              }
+              
+              console.log(`🕒 Rate limit hit, waiting for ${waitTime/1000} seconds before retry...`);
+              
+              // Wait for the specified time
+              await new Promise(resolve => setTimeout(resolve, waitTime));
+              
+              // Increment retry count and try again
+              retryCount++;
+              continue;
+            }
+            
+            throw new Error(errorMessage);
+          }
+
+          const data = await response.json();
+          return data.content || '';
+        } catch (error) {
+          // Store the error for potential re-throw
+          lastError = error instanceof Error ? error : new Error(String(error));
+          
+          // IMPROVED: Check for rate limit errors in the error message
+          if (lastError.message.includes('rate limit') || 
+              lastError.message.includes('429') || 
+              lastError.message.includes('try again in')) {
+            
+            // Extract wait time if available
+            const waitTimeMatch = lastError.message.match(/try again in (\d+\.\d+)s/);
+            let waitTime = Math.pow(2, retryCount) * 1000; // Default exponential backoff
+            
+            if (waitTimeMatch && waitTimeMatch[1]) {
+              waitTime = parseFloat(waitTimeMatch[1]) * 1000 + 1000; // Convert to ms and add 1 second buffer
+            }
+            
+            console.log(`🕒 Rate limit detected, waiting for ${waitTime/1000} seconds before retry...`);
+            
+            // Wait for the specified time
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+            
+            // Increment retry count and try again
+            retryCount++;
+            continue;
+          }
+          
+          // If we've reached max retries or it's not a rate limit error, throw
+          if (retryCount >= maxRetries || 
+              !(lastError.message.includes('rate limit') || 
+                lastError.message.includes('429') || 
+                lastError.message.includes('try again in'))) {
+            throw lastError;
+          }
+          
+          // Otherwise, use exponential backoff
+          const backoffTime = Math.pow(2, retryCount) * 1000;
+          console.log(`⏱️ Retrying after ${backoffTime/1000} seconds (attempt ${retryCount + 1}/${maxRetries + 1})...`);
+          
+          await new Promise(resolve => setTimeout(resolve, backoffTime));
+          retryCount++;
+        }
+      }
+      
+      // If we've exhausted all retries, throw the last error
+      if (lastError) {
+        throw lastError;
+      }
+      
+      // This should never be reached, but TypeScript requires a return
+      throw new Error('Unexpected error in generateAnalysis');
+    } catch (error) {
+      console.error('❌ Analysis API call failed:', error);
+      throw error;
+    }
   }
 }
 

@@ -3,6 +3,8 @@ import { ScriptChunk, ChunkFeedback, ChunkedScriptFeedback, Mentor, Character, T
 import { aiFeedbackService } from './aiFeedbackService';
 import { tokenService } from './tokenService';
 import { getMentorFeedbackStyle } from '../data/mentors';
+import { CharacterDataNormalizer } from '../utils/characterDataNormalizer';
+import { backendApiService } from './backendApiService';
 
 // FIXED: Updated progress interface to match ProcessingProgress from progressiveFeedbackService
 export interface ChunkProcessingProgress {
@@ -43,6 +45,7 @@ export class FeedbackChunkService {
    * NEW: Token-aware chunked feedback generation
    * PRESERVED: All original functionality including batch processing and progress reporting
    * FIXED: Now properly initializes completedChunks and failedChunks arrays
+   * IMPROVED: Better rate limit handling with exact wait times
    */
   async generateChunkedFeedback(request: ChunkedFeedbackRequest): Promise<ChunkedFeedbackResponse> {
   const { 
@@ -178,6 +181,7 @@ export class FeedbackChunkService {
    * Used internally after token validation
    * ALWAYS uses backend API via aiFeedbackService
    * FIXED: Now properly tracks completedChunks and failedChunks
+   * IMPROVED: Better rate limit handling with exact wait times
    */
   private async performOriginalChunkedFeedback({
   chunks,
@@ -328,6 +332,7 @@ export class FeedbackChunkService {
   /**
    * PRESERVED: Generate feedback for a single chunk using backend API via aiFeedbackService
    * ENHANCED: Now with cancellation support
+   * IMPROVED: Better rate limit handling with exact wait times
    */
   private async generateChunkFeedbackViaBackend(
     chunk: ScriptChunk,
@@ -349,27 +354,100 @@ export class FeedbackChunkService {
     const chunkCharacters = this.getChunkCharacters(chunk, characters);
 
     try {
-      // Generate dual feedback using aiFeedbackService WITHOUT token deduction
-      // (tokens already deducted for the entire chunked operation)
-      const dualFeedback = await aiFeedbackService.performOriginalDualFeedback({
-        scene: chunkAsScene,
-        mentor,
-        characters: chunkCharacters,
-        abortSignal
-      });
+      // IMPROVED: Add retry logic with exponential backoff
+      let retryCount = 0;
+      const maxRetries = 3;
+      let lastError: Error | null = null;
 
-      return {
-        chunkId: chunk.id,
-        chunkTitle: chunk.title,
-        structuredContent: dualFeedback.feedback.structuredContent || '',
-        scratchpadContent: dualFeedback.feedback.scratchpadContent || '',
-        mentorId: mentor.id,
-        timestamp: new Date(),
-        categories: dualFeedback.feedback.categories
-      };
+      while (retryCount <= maxRetries) {
+        try {
+          // Check for cancellation before processing
+          if (abortSignal?.aborted) {
+            throw new Error('Chunk processing cancelled');
+          }
+
+          // Generate dual feedback using aiFeedbackService WITHOUT token deduction
+          // (tokens already deducted for the entire chunked operation)
+          const dualFeedback = await aiFeedbackService.performOriginalDualFeedback({
+            scene: chunkAsScene,
+            mentor,
+            characters: chunkCharacters,
+            abortSignal
+          });
+
+          return {
+            chunkId: chunk.id,
+            chunkTitle: chunk.title,
+            structuredContent: dualFeedback.feedback.structuredContent || '',
+            scratchpadContent: dualFeedback.feedback.scratchpadContent || '',
+            mentorId: mentor.id,
+            timestamp: new Date(),
+            categories: dualFeedback.feedback.categories
+          };
+        } catch (error: any) {
+          // Handle cancellation
+          if (abortSignal?.aborted || error.message?.includes('cancelled')) {
+            throw new Error('Chunk processing cancelled');
+          }
+
+          // Store the error for potential re-throw
+          lastError = error instanceof Error ? error : new Error(String(error));
+          
+          // Check for rate limit errors
+          if (this.isRateLimitError(error)) {
+            // IMPROVED: Extract exact wait time from error message
+            const waitTimeMatch = error.toString().match(/try again in (\d+\.\d+)s/);
+            let waitTime = Math.pow(2, retryCount) * 1000; // Default exponential backoff
+            
+            if (waitTimeMatch && waitTimeMatch[1]) {
+              waitTime = parseFloat(waitTimeMatch[1]) * 1000 + 1000; // Convert to ms and add 1 second buffer
+              console.log(`📊 Using exact wait time from API: ${waitTimeMatch[1]}s + 1s buffer`);
+            }
+            
+            console.log(`🕒 Rate limit hit for chunk ${chunk.title}, waiting for ${waitTime/1000} seconds before retry...`);
+            
+            // Check if already aborted before waiting
+            if (abortSignal?.aborted) {
+              throw new Error('Chunk processing cancelled during rate limit wait');
+            }
+            
+            // Wait for the specified time
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+            
+            // Increment retry count and try again
+            retryCount++;
+            continue;
+          }
+          
+          // If we've reached max retries or it's not a rate limit error, throw
+          if (retryCount >= maxRetries || !this.isRateLimitError(error)) {
+            throw lastError;
+          }
+          
+          // Otherwise, use exponential backoff
+          const backoffTime = Math.pow(2, retryCount) * 1000;
+          console.log(`⏱️ Retrying after ${backoffTime/1000} seconds (attempt ${retryCount + 1}/${maxRetries + 1})...`);
+          
+          // Check if already aborted before waiting
+          if (abortSignal?.aborted) {
+            throw new Error('Chunk processing cancelled during backoff wait');
+          }
+          
+          await new Promise(resolve => setTimeout(resolve, backoffTime));
+          retryCount++;
+        }
+      }
+      
+      // If we've exhausted all retries, throw the last error
+      if (lastError) {
+        throw lastError;
+      }
+      
+      // This should never be reached, but TypeScript requires a return
+      throw new Error('Unexpected error in generateChunkFeedbackViaBackend');
     } catch (error) {
       console.error(`❌ Backend API chunk feedback generation failed for ${chunk.title}:`, error);
-      return this.createFallbackChunkFeedback(chunk, mentor);
+      throw error; // Re-throw to be handled by the caller
     }
   }
 
@@ -701,6 +779,23 @@ export class FeedbackChunkService {
       characters,
       onProgress
     });
+  }
+
+  /**
+   * IMPROVED: Check if error is rate limit related with better detection
+   */
+  private isRateLimitError(error: any): boolean {
+    const errorMessage = error?.message?.toLowerCase() || '';
+    const errorString = error?.toString?.()?.toLowerCase() || '';
+    
+    return errorMessage.includes('rate limit') || 
+           errorMessage.includes('too many requests') ||
+           errorMessage.includes('quota exceeded') ||
+           errorMessage.includes('try again in') ||
+           errorMessage.includes('429') ||
+           errorString.includes('rate limit') ||
+           errorString.includes('429') ||
+           errorString.includes('try again in');
   }
 }
 

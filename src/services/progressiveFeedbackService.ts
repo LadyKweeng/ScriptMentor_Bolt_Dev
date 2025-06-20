@@ -57,6 +57,7 @@ export class ProgressiveFeedbackService {
    * Uses the same progressive UI for all feedback types
    * ALWAYS uses backend API for ALL modes
    * ENHANCED: Now with cancellation support
+   * IMPROVED: Better rate limit handling with exact wait times
    */
   async processChunksProgressively(
     chunks: ScriptChunk[],
@@ -165,9 +166,18 @@ export class ProgressiveFeedbackService {
             if (this.isRateLimitError(error)) {
               console.log(`🚨 Rate limit hit for ${chunk.title} (attempt ${retryCount}/${config.retryAttempts + 1})`);
               
+              // IMPROVED: Extract exact wait time from error message
+              const waitTimeMatch = error.toString().match(/try again in (\d+\.\d+)s/);
+              let retryDelay = this.calculateRetryDelay(retryCount, config);
+              
+              if (waitTimeMatch && waitTimeMatch[1]) {
+                const recommendedWaitTime = parseFloat(waitTimeMatch[1]);
+                // Use recommended wait time plus 1 second buffer
+                retryDelay = (recommendedWaitTime * 1000) + 1000;
+                console.log(`📊 Using exact wait time from API: ${recommendedWaitTime}s + 1s buffer`);
+              }
+              
               if (retryCount <= config.retryAttempts) {
-                const retryDelay = this.calculateRetryDelay(retryCount, config);
-                
                 onProgress({
                   currentChunk: i + 1,
                   totalChunks: chunks.length,
@@ -303,6 +313,7 @@ export class ProgressiveFeedbackService {
    * Enhanced method for processing true blended feedback from multiple mentors
    * ALWAYS uses backend API
    * ENHANCED: Now with cancellation support
+   * IMPROVED: Better rate limit handling with exact wait times
    */
   async processBlendedFeedback(
     chunks: ScriptChunk[],
@@ -420,6 +431,40 @@ export class ProgressiveFeedbackService {
 
             lastError = error;
             retryCount++;
+
+            // IMPROVED: Check for rate limit errors and extract wait time
+            if (this.isRateLimitError(error)) {
+              const waitTimeMatch = error.toString().match(/try again in (\d+\.\d+)s/);
+              let retryDelay = this.calculateRetryDelay(retryCount, config);
+              
+              if (waitTimeMatch && waitTimeMatch[1]) {
+                const recommendedWaitTime = parseFloat(waitTimeMatch[1]);
+                // Use recommended wait time plus 1 second buffer
+                retryDelay = (recommendedWaitTime * 1000) + 1000;
+                console.log(`📊 Using exact wait time from API: ${recommendedWaitTime}s + 1s buffer`);
+              }
+              
+              if (retryCount <= config.retryAttempts) {
+                onProgress({
+                  currentChunk: i + 1,
+                  totalChunks: chunks.length,
+                  chunkTitle: chunk.title,
+                  progress: Math.round((i / chunks.length) * 100),
+                  message: `Rate limit hit - retrying in ${Math.round(retryDelay / 1000)}s...`,
+                  isRetrying: true,
+                  retryCount,
+                  nextRetryIn: retryDelay,
+                  completedChunks: [...completedChunks],
+                  failedChunks: [...failedChunks],
+                  processingType: 'blended',
+                  mentorCount: mentors.length,
+                  blendingMentors: mentors.map(m => m.name)
+                });
+
+                await this.sleepWithCancellation(retryDelay, abortSignal);
+                continue;
+              }
+            }
 
             if (retryCount <= config.retryAttempts) {
               const retryDelay = this.calculateRetryDelay(retryCount, config);
@@ -582,6 +627,7 @@ export class ProgressiveFeedbackService {
   /**
    * Process a single chunk using backend API directly
    * ENHANCED: Now with cancellation support
+   * IMPROVED: Better rate limit handling with exact wait times
    */
   private async processChunkViaBackend(
     chunk: ScriptChunk,
@@ -655,6 +701,7 @@ export class ProgressiveFeedbackService {
   /**
    * Process single scene chunk via backend API
    * ENHANCED: Now with cancellation support
+   * IMPROVED: Better rate limit handling with exact wait times
    */
   private async processSingleSceneChunkViaBackend(
     chunk: ScriptChunk,
@@ -709,6 +756,13 @@ export class ProgressiveFeedbackService {
       }
 
       if (this.isRateLimitError(error)) {
+        // IMPROVED: Extract exact wait time from error message
+        const waitTimeMatch = error.toString().match(/try again in (\d+\.\d+)s/);
+        if (waitTimeMatch && waitTimeMatch[1]) {
+          const recommendedWaitTime = parseFloat(waitTimeMatch[1]);
+          console.log(`📊 Rate limit hit with recommended wait time: ${recommendedWaitTime}s + 1s buffer`);
+        }
+        
         throw new Error(`RATE_LIMIT: ${error.message}`);
       } else {
         throw error;
@@ -719,6 +773,7 @@ export class ProgressiveFeedbackService {
   /**
    * Process blended chunk via backend API
    * ENHANCED: Now with cancellation support
+   * IMPROVED: Better rate limit handling with exact wait times
    */
   private async processBlendedChunkViaBackend(
     chunk: ScriptChunk,
@@ -773,6 +828,13 @@ export class ProgressiveFeedbackService {
       }
 
       if (this.isRateLimitError(error)) {
+        // IMPROVED: Extract exact wait time from error message
+        const waitTimeMatch = error.toString().match(/try again in (\d+\.\d+)s/);
+        if (waitTimeMatch && waitTimeMatch[1]) {
+          const recommendedWaitTime = parseFloat(waitTimeMatch[1]);
+          console.log(`📊 Rate limit hit with recommended wait time: ${recommendedWaitTime}s + 1s buffer`);
+        }
+        
         throw new Error(`RATE_LIMIT: ${error.message}`);
       } else {
         throw error;
@@ -896,6 +958,7 @@ export class ProgressiveFeedbackService {
 
   /**
    * Check if error is rate limit related
+   * IMPROVED: More comprehensive detection of rate limit errors
    */
   private isRateLimitError(error: any): boolean {
     const errorMessage = error?.message?.toLowerCase() || '';
@@ -904,8 +967,11 @@ export class ProgressiveFeedbackService {
     return errorMessage.includes('rate limit') || 
            errorMessage.includes('too many requests') ||
            errorMessage.includes('quota exceeded') ||
+           errorMessage.includes('try again in') ||
+           errorMessage.includes('429') ||
            errorString.includes('rate limit') ||
-           errorString.includes('429');
+           errorString.includes('429') ||
+           errorString.includes('try again in');
   }
 
   /**
@@ -927,10 +993,14 @@ export class ProgressiveFeedbackService {
 
   /**
    * Calculate retry delay with exponential backoff
+   * IMPROVED: More sophisticated backoff calculation
    */
   private calculateRetryDelay(retryCount: number, config: ProgressiveProcessingOptions): number {
     if (config.exponentialBackoff) {
-      return config.baseDelay * Math.pow(2, retryCount - 1);
+      // Use exponential backoff with jitter to avoid thundering herd
+      const baseDelay = config.baseDelay * Math.pow(2, retryCount - 1);
+      const jitter = Math.random() * 0.3 * baseDelay; // Add up to 30% jitter
+      return baseDelay + jitter;
     }
     return config.baseDelay * retryCount;
   }
@@ -1178,6 +1248,7 @@ Make this sound like genuine professional feedback, not template text. Focus on 
 
 /**
  * NEW: Call AI service for summary generation
+ * IMPROVED: Added rate limit handling with exact wait times
  */
 private async callAIForSummary(prompt: string): Promise<{
   overallStructure: string;
@@ -1186,8 +1257,9 @@ private async callAIForSummary(prompt: string): Promise<{
   globalRecommendations: string[];
 } | null> {
   try {
-    // Try using the backend API service first
+    // Try using the backend API service first with improved rate limit handling
     try {
+      // IMPROVED: Use the enhanced generateAnalysis method with retry logic
       const response = await backendApiService.generateAnalysis({
         prompt,
         analysisType: 'summary',
@@ -1210,42 +1282,123 @@ private async callAIForSummary(prompt: string): Promise<{
 
     // Fallback: Direct OpenAI call (if environment supports it)
     if (typeof window === 'undefined' && process.env.OPENAI_API_KEY) {
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
-        },
-        body: JSON.stringify({
-          model: 'gpt-4o-mini',
-          messages: [
-            {
-              role: 'system',
-              content: 'You are an expert screenplay analyst who creates comprehensive script overviews from detailed feedback analysis.'
+      // IMPROVED: Add retry logic for direct OpenAI calls
+      let retryCount = 0;
+      const maxRetries = 3;
+      let lastError: Error | null = null;
+
+      while (retryCount <= maxRetries) {
+        try {
+          const response = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
             },
-            {
-              role: 'user',
-              content: prompt
+            body: JSON.stringify({
+              model: 'gpt-4o-mini',
+              messages: [
+                {
+                  role: 'system',
+                  content: 'You are an expert screenplay analyst who creates comprehensive script overviews from detailed feedback analysis.'
+                },
+                {
+                  role: 'user',
+                  content: prompt
+                }
+              ],
+              temperature: 0.3,
+              response_format: { type: 'json_object' }
+            })
+          });
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            const errorMessage = `OpenAI API Error: ${response.status} - ${errorData.error?.message || response.statusText}`;
+            
+            // Check for rate limit errors (429 status code)
+            if (response.status === 429) {
+              const waitTimeMatch = errorData.error?.message?.match(/try again in (\d+\.\d+)s/);
+              let waitTime = Math.pow(2, retryCount) * 1000; // Default exponential backoff
+              
+              if (waitTimeMatch && waitTimeMatch[1]) {
+                waitTime = parseFloat(waitTimeMatch[1]) * 1000 + 1000; // Convert to ms and add 1 second buffer
+              }
+              
+              console.log(`🕒 Rate limit hit, waiting for ${waitTime/1000} seconds before retry...`);
+              
+              // Wait for the specified time
+              await new Promise(resolve => setTimeout(resolve, waitTime));
+              
+              // Increment retry count and try again
+              retryCount++;
+              continue;
             }
-          ],
-          temperature: 0.3,
-          response_format: { type: 'json_object' }
-        })
-      });
+            
+            throw new Error(errorMessage);
+          }
 
-      if (response.ok) {
-        const data = await response.json();
-        const content = data.choices?.[0]?.message?.content;
+          const data = await response.json();
+          const content = data.choices?.[0]?.message?.content;
 
-        if (content) {
-          const parsed = JSON.parse(content);
-          return {
-            overallStructure: parsed.overallStructure || '',
-            keyStrengths: Array.isArray(parsed.keyStrengths) ? parsed.keyStrengths : [],
-            majorIssues: Array.isArray(parsed.majorIssues) ? parsed.majorIssues : [],
-            globalRecommendations: Array.isArray(parsed.globalRecommendations) ? parsed.globalRecommendations : []
-          };
+          if (content) {
+            const parsed = JSON.parse(content);
+            return {
+              overallStructure: parsed.overallStructure || '',
+              keyStrengths: Array.isArray(parsed.keyStrengths) ? parsed.keyStrengths : [],
+              majorIssues: Array.isArray(parsed.majorIssues) ? parsed.majorIssues : [],
+              globalRecommendations: Array.isArray(parsed.globalRecommendations) ? parsed.globalRecommendations : []
+            };
+          }
+          
+          break; // Exit loop if we got a response but no content
+        } catch (error) {
+          // Store the error for potential re-throw
+          lastError = error instanceof Error ? error : new Error(String(error));
+          
+          // Check for rate limit errors in the error message
+          if (lastError.message.includes('rate limit') || 
+              lastError.message.includes('429') || 
+              lastError.message.includes('try again in')) {
+            
+            // Extract wait time if available
+            const waitTimeMatch = lastError.message.match(/try again in (\d+\.\d+)s/);
+            let waitTime = Math.pow(2, retryCount) * 1000; // Default exponential backoff
+            
+            if (waitTimeMatch && waitTimeMatch[1]) {
+              waitTime = parseFloat(waitTimeMatch[1]) * 1000 + 1000; // Convert to ms and add 1 second buffer
+            }
+            
+            console.log(`🕒 Rate limit detected, waiting for ${waitTime/1000} seconds before retry...`);
+            
+            // Wait for the specified time
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+            
+            // Increment retry count and try again
+            retryCount++;
+            continue;
+          }
+          
+          // If we've reached max retries or it's not a rate limit error, throw
+          if (retryCount >= maxRetries || 
+              !(lastError.message.includes('rate limit') || 
+                lastError.message.includes('429') || 
+                lastError.message.includes('try again in'))) {
+            throw lastError;
+          }
+          
+          // Otherwise, use exponential backoff
+          const backoffTime = Math.pow(2, retryCount) * 1000;
+          console.log(`⏱️ Retrying after ${backoffTime/1000} seconds (attempt ${retryCount + 1}/${maxRetries + 1})...`);
+          
+          await new Promise(resolve => setTimeout(resolve, backoffTime));
+          retryCount++;
         }
+      }
+      
+      // If we've exhausted all retries, throw the last error
+      if (lastError) {
+        throw lastError;
       }
     }
 
