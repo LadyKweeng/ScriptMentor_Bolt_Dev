@@ -21,6 +21,7 @@ import {
   Layers,
   Sparkles
 } from 'lucide-react';
+import { backendApiService } from '../services/backendApiService';
 
 interface ChunkedFeedbackViewProps {
   chunkedFeedback: ChunkedScriptFeedback;
@@ -48,18 +49,28 @@ const ChunkedFeedbackView: React.FC<ChunkedFeedbackViewProps> = ({
   const [viewMode, setViewMode] = useState<ViewMode>('overview');
   const [expandedChunks, setExpandedChunks] = useState<Set<string>>(new Set());
   const [copiedItem, setCopiedItem] = useState<string>('');
+  const [overviewContent, setOverviewContent] = useState<string>('');
+  const [isGeneratingOverview, setIsGeneratingOverview] = useState(false);
 
   // Enhanced blended feedback detection
   const isBlended = mentor.id === 'blended';
 
+  // MINIMAL FIX: Only sync when feedbackMode actually changes and avoid the infinite loop
   useEffect(() => {
-    console.log('📋 View mode updated:', viewMode);
-    // Only update view mode if it's not overview and feedbackMode changes
-    if (viewMode !== 'overview' && feedbackMode && feedbackMode !== viewMode) {
+    console.log('📋 feedbackMode prop changed:', feedbackMode);
+    // Only sync if feedbackMode is different from current viewMode and not overview
+    if (feedbackMode && feedbackMode !== viewMode && viewMode !== 'overview') {
       console.log('🔄 Syncing with parent feedbackMode:', feedbackMode);
       setViewMode(feedbackMode);
     }
-  }, [feedbackMode]); // Remove viewMode from dependencies to prevent infinite loop
+  }, [feedbackMode]); // Don't include viewMode in dependencies
+
+  // Generate AI overview when needed
+  useEffect(() => {
+    if (viewMode === 'overview' && !overviewContent) {
+      generateOverview();
+    }
+  }, [chunkedFeedback.id, viewMode]);
 
   const handleViewModeChange = (mode: ViewMode) => {
     console.log('🔄 Switching view mode:', { from: viewMode, to: mode });
@@ -115,6 +126,137 @@ const ChunkedFeedbackView: React.FC<ChunkedFeedbackViewProps> = ({
     return content || 'No content available for this section.';
   };
 
+  // Generate AI overview based on chunked feedback
+  const generateOverview = async () => {
+    try {
+      setIsGeneratingOverview(true);
+      
+      // Get content from summary and a sample of chunks
+      const summary = chunkedFeedback.summary || {};
+      const chunks = chunkedFeedback.chunks || [];
+      
+      // Get a sample of chunk content (first, middle, last)
+      const sampleChunks = [];
+      if (chunks.length > 0) sampleChunks.push(chunks[0]);
+      if (chunks.length > 2) sampleChunks.push(chunks[Math.floor(chunks.length / 2)]);
+      if (chunks.length > 1) sampleChunks.push(chunks[chunks.length - 1]);
+      
+      // Create prompt for AI to generate overview
+      const prompt = `
+You are ${mentor.name}, a screenplay mentor with the following style:
+"${mentor.tone}"
+
+You've provided feedback on a chunked screenplay with ${chunks.length} sections. Based on your feedback, create a concise overview summary.
+
+The feedback summary includes:
+${summary.overallStructure || ''}
+
+Key strengths identified:
+${summary.keyStrengths?.join('\n') || 'No key strengths identified.'}
+
+Major issues identified:
+${summary.majorIssues?.join('\n') || 'No major issues identified.'}
+
+Sample feedback from sections:
+${sampleChunks.map(chunk => `
+SECTION: ${chunk.chunkTitle}
+${chunk.structuredContent?.substring(0, 300)}...
+`).join('\n')}
+
+Write a 3-paragraph overview (2-3 sentences each) that summarizes your key insights about this screenplay.
+- Use your unique voice and perspective as ${mentor.name}
+- Focus on the most important points from the overall analysis
+- Maintain your specific mentoring style and tone
+- Write in paragraph form (not bullet points)
+- Be specific about the screenplay's strengths and weaknesses
+- End with your overall assessment and most important recommendation
+
+Your overview should sound like it was written by you personally, not generated.
+`;
+
+      try {
+        // Use backendApiService to generate the overview
+        const overview = await backendApiService.generateAnalysis({
+          prompt,
+          analysisType: 'overview',
+          model: 'gpt-4o-mini',
+          temperature: 0.7
+        });
+        
+        if (overview) {
+          setOverviewContent(overview);
+        } else {
+          // Fallback if API fails
+          setOverviewContent(generateFallbackOverview(chunkedFeedback, mentor));
+        }
+      } catch (error) {
+        console.error('Failed to generate AI overview:', error);
+        setOverviewContent(generateFallbackOverview(chunkedFeedback, mentor));
+      }
+    } finally {
+      setIsGeneratingOverview(false);
+    }
+  };
+
+  // Generate a fallback overview if AI generation fails
+  const generateFallbackOverview = (chunkedFeedback: ChunkedScriptFeedback, mentor: any): string => {
+    const isBlended = mentor.id === 'blended';
+    const summary = chunkedFeedback.summary || {};
+    
+    let overview = '';
+    
+    if (isBlended) {
+      overview = `This script presents a blend of strengths and challenges when viewed through multiple mentoring perspectives. The structure shows potential but requires refinement to fully realize its dramatic potential across all ${chunkedFeedback.chunks?.length || 0} sections. The character work contains promising elements that could be enhanced through more specific choices and clearer objectives throughout the narrative.\n\n`;
+      
+      overview += `From a dialogue perspective, there are moments of authenticity mixed with areas that need more subtext and purpose. The pacing varies throughout, with some sections moving effectively while others could benefit from tightening or expansion to better serve the story's rhythm. These observations represent a consensus across different mentoring approaches applied to the full script.\n\n`;
+      
+      overview += `Overall, this script demonstrates promise that can be fully realized through targeted revisions. By addressing the structural and character issues identified across multiple perspectives, while preserving the existing strengths, the screenplay can achieve a more compelling and cohesive form. The most critical next step is to ensure every scene serves the central dramatic engine while maintaining authentic character psychology.`;
+    } else {
+      switch (mentor.id) {
+        case 'tony-gilroy':
+          overview = `This ${chunkedFeedback.chunks?.length || 0}-section script needs a clearer engine driving the narrative forward. The structure has potential but lacks the surgical precision needed to maintain momentum and purpose across all sections. Every scene must earn its place by advancing plot or revealing character in ways that feel inevitable yet surprising.\n\n`;
+          
+          overview += `The dialogue occasionally works but often falls into exposition or fails to reveal character through conflict. Look for opportunities to cut unnecessary exchanges and ensure every line serves multiple purposes - advancing story while revealing character simultaneously. The real drama often lies beneath the surface of what's being said.\n\n`;
+          
+          overview += `Overall, this screenplay requires a ruthless examination of what's essential versus what's merely interesting. Cut anything that doesn't directly serve your story engine, clarify character objectives in every scene, and ensure each moment creates inevitable momentum toward your conclusion. Remember: if nothing breaks when you remove a scene, it doesn't belong in your script.`;
+          break;
+          
+        case 'sofia-coppola':
+          overview = `This ${chunkedFeedback.chunks?.length || 0}-section screenplay has moments of emotional authenticity that deserve to be amplified. The atmosphere and mood show potential, but could be more consistently developed to reflect the internal landscapes of your characters. There's room to trust silence and visual storytelling more deeply throughout the narrative.\n\n`;
+          
+          overview += `Your character work contains promising elements, though the emotional truth sometimes gets buried under exposition. Look for opportunities to reveal feelings through behavior rather than dialogue, and trust that small, specific details often carry more emotional weight than explanations. The most powerful moments are often found in what remains unsaid.\n\n`;
+          
+          overview += `Overall, this script would benefit from a greater confidence in subtext and atmospheric detail. Focus on creating moments where environment and character psychology merge, where gestures reveal more than words, and where the audience is trusted to feel rather than be told. Remember that the truth lives in what isn't said - in the spaces between words.`;
+          break;
+          
+        case 'vince-gilligan':
+          overview = `This ${chunkedFeedback.chunks?.length || 0}-section screenplay shows potential in its character foundations, though the psychological depth could be more consistently developed. The choices characters make sometimes feel driven by plot necessity rather than emerging organically from established traits and flaws. Every decision should feel both surprising and inevitable.\n\n`;
+          
+          overview += `The moral complexity of your story has interesting dimensions that could be further explored. Look for opportunities to place characters in situations where there are no clear right answers, where their core values come into conflict with their immediate needs. These impossible choices reveal character truth in ways that simple obstacles cannot.\n\n`;
+          
+          overview += `Overall, this script would benefit from a deeper exploration of how character psychology drives plot, rather than the reverse. Ensure that each character's actions emerge from their specific flaws and desires, creating consequences that feel both unexpected and unavoidable. Remember that character is plot - what would this specific person actually do in this impossible situation?`;
+          break;
+          
+        case 'amy-pascal':
+          overview = `This ${chunkedFeedback.chunks?.length || 0}-section screenplay has elements that audiences could connect with, though the emotional stakes need to be more consistently clear and relatable. The characters show potential, but their journeys would resonate more deeply if grounded in universal human experiences that viewers can immediately recognize and feel.\n\n`;
+          
+          overview += `The script balances artistic elements with commercial appeal, though this balance could be more consistent throughout. Look for opportunities to maintain your unique voice while ensuring the audience always understands what's at stake emotionally for your characters. The most successful stories combine artistic integrity with broad human connection.\n\n`;
+          
+          overview += `Overall, this screenplay would benefit from a sharper focus on making us care about these specific characters and their journey. Ensure that beneath the plot mechanics lies a recognizable emotional truth that resonates across different audiences. Remember that great scripts make you forget you're reading - they make you care.`;
+          break;
+          
+        default:
+          overview = `This ${chunkedFeedback.chunks?.length || 0}-section screenplay shows both strengths and areas for development. The structure has promising elements but could be more consistently focused on driving the central narrative forward. Character motivations are sometimes clear but would benefit from more specific objectives and obstacles throughout.\n\n`;
+          
+          overview += `The dialogue contains effective moments mixed with areas that could be more efficient and purposeful. Look for opportunities to reveal character through subtext rather than exposition, and ensure each exchange serves multiple dramatic functions. The pacing varies throughout, with some sections moving effectively while others could be tightened.\n\n`;
+          
+          overview += `Overall, this script demonstrates potential that can be realized through targeted revisions. Focus on clarifying the central dramatic question, ensuring character choices emerge from established traits, and maintaining consistent momentum throughout. With these adjustments, the screenplay will achieve a more compelling and cohesive form.`;
+      }
+    }
+    
+    return overview;
+  };
+
   // Enhanced chunk status detection with blended feedback support
   const getChunkStatusInfo = (chunk: any) => {
     if ((chunk as any).processingError) {
@@ -164,247 +306,39 @@ const ChunkedFeedbackView: React.FC<ChunkedFeedbackViewProps> = ({
 
   const stats = getChunkStats();
 
-  // Generate comprehensive script overview
-  // Generate comprehensive script overview
-const generateScriptOverview = () => {
-  const chunks = chunkedFeedback?.chunks || [];
-  const summary = chunkedFeedback?.summary;
-  
-  if (chunks.length === 0) {
-    return {
-      structuralAnalysis: { assessment: "No chunks available for analysis.", recommendation: "Please ensure script is properly processed." },
-      characterAnalysis: { assessment: "No chunks available for analysis.", recommendation: "Please ensure script is properly processed." },
-      dialogueAnalysis: { assessment: "No chunks available for analysis.", recommendation: "Please ensure script is properly processed." },
-      pacingAnalysis: { assessment: "No chunks available for analysis.", recommendation: "Please ensure script is properly processed." },
-      overallAssessment: "Script analysis unavailable. Please ensure the script has been properly processed."
-    };
-  }
-  
-  // NEW: Check if summary is template-based (contains generic phrases)
-  const isTemplateSummary = summary?.overallStructure && (
-    summary.overallStructure.includes('Script processed in') ||
-    summary.overallStructure.includes('Blended analysis from') ||
-    summary.overallStructure.includes('sections via backend API') ||
-    summary.overallStructure.includes('successfully analyzed with')
-  );
-  
-  console.log('📋 Summary template check:', {
-    hasSummary: !!summary?.overallStructure,
-    isTemplate: isTemplateSummary,
-    content: summary?.overallStructure?.substring(0, 100)
-  });
-  
-  // PRIORITY 1: Use AI-generated summary ONLY if it's NOT template-based
-  if (summary && summary.overallStructure && !isTemplateSummary) {
-    console.log('📋 Using genuine AI-generated summary for overview');
-    
-    return {
-      structuralAnalysis: {
-        assessment: summary.overallStructure,
-        recommendation: summary.globalRecommendations?.[0] || "Review detailed feedback for specific improvements."
-      },
-      characterAnalysis: {
-        assessment: isBlended 
-          ? "Multi-mentor character analysis reveals comprehensive insights across all sections from multiple mentoring perspectives."
-          : "Character development analysis completed with mentor-specific insights.",
-        recommendation: summary.globalRecommendations?.[1] || "Focus on character consistency and development arcs."
-      },
-      dialogueAnalysis: {
-        assessment: isBlended
-          ? "Blended dialogue analysis demonstrates multi-perspective evaluation of character voices and conversation effectiveness."
-          : "Dialogue craft has been analyzed for voice, subtext, and story advancement.",
-        recommendation: summary.globalRecommendations?.[2] || "Continue refining dialogue to serve multiple dramatic purposes."
-      },
-      pacingAnalysis: {
-        assessment: isBlended
-          ? "Multi-perspective pacing analysis shows comprehensive evaluation of rhythm and momentum across all sections."
-          : "Pacing analysis reveals rhythm patterns and momentum throughout the script.",
-        recommendation: summary.globalRecommendations?.[3] || "Balance action and reflection for optimal engagement."
-      },
-      overallAssessment: summary.overallStructure
-    };
-  }
-  
-  // PRIORITY 2: Extract meaningful content from successful chunks (ALWAYS use for template summaries)
-  const successfulChunks = chunks.filter(chunk => !(chunk as any).processingError);
-  if (successfulChunks.length > 0) {
-    console.log('📋 Extracting real AI content from individual chunks (template summary detected)');
-    
-    // Extract the most meaningful sentences from AI-generated feedback
-    const extractBestSentence = (searchTerms: string[]) => {
-      for (const chunk of successfulChunks) {
-        const content = chunk.structuredContent || chunk.scratchpadContent || '';
-        
-        // Split into sentences and clean them
-        const sentences = content
-          .split(/[.!?]+/)
-          .map(s => s.trim())
-          .filter(s => s.length > 30 && s.length < 400);
-        
-        // Find the best sentence for this category
-        for (const term of searchTerms) {
-          const bestSentence = sentences.find(sentence => {
-            const lower = sentence.toLowerCase();
-            return lower.includes(term.toLowerCase()) && 
-                   !lower.includes('mentor') && 
-                   !lower.includes('analysis') &&
-                   (lower.includes('character') || lower.includes('dialogue') || 
-                    lower.includes('story') || lower.includes('scene') ||
-                    lower.includes('pacing') || lower.includes('structure'));
-          });
-          
-          if (bestSentence) {
-            return bestSentence + '.';
-          }
-        }
-      }
-      return null;
-    };
-
-    // Extract real insights from AI feedback
-    const structuralInsight = extractBestSentence(['structure', 'story', 'narrative', 'scenes', 'plot']);
-    const characterInsight = extractBestSentence(['character', 'protagonist', 'development', 'relationships']);
-    const dialogueInsight = extractBestSentence(['dialogue', 'conversation', 'voice', 'speaking']);
-    const pacingInsight = extractBestSentence(['pacing', 'rhythm', 'flow', 'momentum', 'tension']);
-
-    // Use the actual AI insights if found, otherwise create meaningful fallbacks
-    return {
-      structuralAnalysis: {
-        assessment: structuralInsight || 
-          `The script structure has been analyzed across ${successfulChunks.length} sections, revealing specific patterns in narrative flow and scene construction.`,
-        recommendation: "Review individual section feedback for detailed structural improvements."
-      },
-      characterAnalysis: {
-        assessment: characterInsight || 
-          `Character development shows distinct patterns across ${successfulChunks.length} sections with opportunities for enhanced consistency.`,
-        recommendation: "Focus on maintaining character voice and motivation throughout all sections."
-      },
-      dialogueAnalysis: {
-        assessment: dialogueInsight || 
-          `Dialogue effectiveness varies across sections, with opportunities to strengthen character voice distinctiveness.`,
-        recommendation: "Ensure dialogue serves multiple purposes: character, plot, and subtext."
-      },
-      pacingAnalysis: {
-        assessment: pacingInsight || 
-          `Pacing patterns across ${successfulChunks.length} sections show areas for rhythm optimization.`,
-        recommendation: "Balance action and reflection to maintain reader engagement."
-      },
-      overallAssessment: structuralInsight || characterInsight || dialogueInsight || pacingInsight || 
-        `Professional analysis of ${successfulChunks.length} script sections reveals both strengths and specific opportunities for enhancement. The feedback provides concrete guidance for improving narrative effectiveness.`
-    };
-  }
-  
-  // FALLBACK: Use existing analysis functions only as last resort
-  console.log('📋 Using fallback analysis functions for overview');
-  return {
-    structuralAnalysis: analyzeScriptStructure(chunks, isBlended),
-    characterAnalysis: analyzeCharacterPresence(chunks, isBlended),
-    dialogueAnalysis: analyzeDialoguePatterns(chunks, isBlended),
-    pacingAnalysis: analyzePacingFlow(chunks, isBlended),
-    overallAssessment: generateOverallAssessment(chunks, summary, mentor, isBlended)
-  };
-};
-
-  // Helper functions for generateScriptOverview
-const analyzeChunkContent = (chunks: ChunkFeedback[], category: string, isBlended: boolean) => {
-  const blendedPrefix = isBlended ? "Blended mentor analysis reveals " : "";
-  const blendedContext = isBlended ? " from multiple mentoring perspectives" : "";
-
-  // Extract meaningful content from AI-generated feedback
-  const relevantContent = chunks
-    .map(chunk => {
-      const content = chunk.structuredContent || chunk.scratchpadContent || '';
-      return content.toLowerCase().includes(category) ? content : '';
-    })
-    .filter(content => content.length > 0);
-
-  if (relevantContent.length > 0) {
-    // Use actual AI feedback content
-    const firstRelevantContent = relevantContent[0];
-    const contentLength = Math.min(200, firstRelevantContent.length);
-    const excerpt = firstRelevantContent.substring(0, contentLength).trim();
-
-    return {
-      assessment: `${blendedPrefix}${excerpt}${excerpt.length === 200 ? '...' : ''}${blendedContext}`,
-      recommendation: `Review the detailed ${category} feedback in each section for specific actionable insights${blendedContext}.`
-    };
-  }
-
-  // Generic fallback
-  return {
-    assessment: `${blendedPrefix}${category} analysis has been completed${blendedContext}. Detailed insights are available in the section-by-section feedback.`,
-    recommendation: `Examine each section's ${category} feedback for specific recommendations${blendedContext}.`
-  };
-};
-
-const generateAIBasedAssessment = (chunks: ChunkFeedback[], summary: any, mentor: any, isBlended: boolean): string => {
-  const sectionsCount = chunks?.length || 0;
-  const successfulCount = chunks?.filter(chunk => !(chunk as any).processingError).length || 0;
-  const mentorName = mentor?.name || 'Unknown Mentor';
-
-  if (sectionsCount === 0) {
-    return "Script analysis is incomplete. Please ensure all sections have been properly processed to generate a comprehensive assessment.";
-  }
-
-  // Use summary content if available
-  if (summary?.overallStructure) {
-    return summary.overallStructure;
-  }
-
-  // Generate mentor-specific assessment
-  if (isBlended) {
-    return `This ${sectionsCount}-section script analysis combines insights from multiple mentoring perspectives to provide comprehensive guidance. With ${successfulCount} sections successfully analyzed, the blended approach reveals both consensus strengths and diverse viewpoints on areas for improvement. The multi-mentor analysis shows promise in the script's foundation while identifying specific opportunities for enhancement across structure, character development, dialogue craft, and pacing flow. This comprehensive perspective offers writers the benefit of diverse mentoring approaches, allowing for more nuanced and complete script development.`;
-  }
-
-  // Mentor-specific assessments
-  switch (mentor?.id) {
-    case 'tony-gilroy':
-      return `This ${sectionsCount}-section script shows promise but needs focused attention on its story engine. The core dramatic spine needs strengthening to ensure every scene serves the central narrative drive. While individual moments may work, the overall machinery of story could be more efficient. Cut what doesn't serve the engine, clarify character objectives, and ensure each section builds inevitable momentum toward your story's destination.`;
-
-    case 'sofia-coppola':
-      return `Across these ${sectionsCount} sections, there's an opportunity to trust more in the emotional authenticity and atmospheric details that make stories resonate. The script has moments of genuine feeling, but could benefit from more confidence in subtext and silence. Focus on the internal landscapes of your characters and let the environment reflect their psychological states.`;
-
-    default:
-      return `This ${sectionsCount}-section analysis by ${mentorName} reveals both strengths and opportunities for development. With ${successfulCount} sections successfully processed, the feedback provides specific guidance for enhancing the script's effectiveness. Focus on implementing the detailed recommendations provided in each section to strengthen the overall narrative impact.`;
-  }
-};
-
-const overview = generateScriptOverview();
-
-return (
-  <div 
-    className="bg-slate-800 rounded-lg overflow-hidden border border-slate-700 h-[calc(100vh-16rem)] flex flex-col"
-    style={{ boxShadow: `0 4px 12px ${mentor.accent}20` }}
-  >
-      {/* Enhanced Header with Better Spacing and Responsive Design */}
-      <div 
-        className="p-3 sm:p-4 bg-slate-900 border-b border-slate-700 flex items-center justify-between flex-shrink-0"
+  return (
+    <div 
+      className="bg-slate-800 rounded-lg overflow-hidden border border-slate-700 h-[calc(100vh-16rem)] flex flex-col"
+      style={{ boxShadow: `0 4px 12px ${mentor.accent}20` }}
+    >
+      {/* Enhanced Header with Blended Feedback Support */}
+      <div
+        className="p-3 sm:p-4 bg-slate-900 border-b border-slate-700 flex items-center justify-between flex-shrink-0 min-w-0"
         style={{ borderBottom: `2px solid ${mentor.accent}` }}
       >
         {/* Left Section - Mentor Info */}
-        <div className="flex items-center min-w-0 flex-1">
-          <img 
-            src={mentor.avatar} 
-            alt={mentor.name} 
-            className="w-8 h-8 sm:w-10 sm:h-10 rounded-full object-cover mr-2 sm:mr-3 border-2 flex-shrink-0"
+        <div className="flex items-center min-w-0 flex-shrink-0 max-w-xs lg:max-w-none">
+          <img
+            src={mentor.avatar}
+            alt={mentor.name}
+            className="w-10 h-10 rounded-full object-cover mr-3 border-2 flex-shrink-0"
             style={{ borderColor: mentor.accent }}
           />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <h3 className="font-medium text-white text-sm sm:text-base truncate">{mentor.name}</h3>
-              {isBlended && (
-                <span className="bg-purple-500/20 text-purple-400 px-1.5 py-0.5 rounded-full text-xs font-medium border border-purple-500/30 flex items-center gap-1 flex-shrink-0">
-                  <Users className="h-3 w-3" />
-                  <span className="hidden sm:inline">Multi-Mentor</span>
-                  <span className="sm:hidden">Multi</span>
-                </span>
-              )}
+              <h3 className="font-medium text-white truncate">{mentor.name}</h3>
             </div>
+            <p className="text-xs text-slate-400 italic truncate">
+              <span className="hidden lg:inline">{mentor.tone}</span>
+              <span className="lg:hidden">
+                {mentor.tone.length > 20 ? mentor.tone.substring(0, 20) + '...' : mentor.tone}
+              </span>
+            </p>
           </div>
         </div>
 
         {/* Center Section - Error/Warning Stats Only */}
-        <div className="flex items-center gap-1 sm:gap-2 mx-2 sm:mx-4 flex-shrink-0">
+        <div className="flex items-center gap-1 sm:gap-2 mx-1 sm:mx-2 md:mx-4 flex-1 justify-center overflow-hidden">
           {stats.rateLimited > 0 && (
             <span className="bg-yellow-500/20 text-yellow-400 px-1.5 sm:px-2 py-1 rounded-full text-xs font-medium border border-yellow-500/30 whitespace-nowrap">
               <span className="hidden sm:inline">{stats.rateLimited} Rate Limited</span>
@@ -427,69 +361,54 @@ return (
           )}
         </div>
 
-        {/* Right Section - View Mode Toggle - Fully Responsive */}
-        <div className="flex bg-slate-700 rounded-lg p-0.5 flex-shrink-0">
+        {/* Right Section - View Mode Toggle */}
+        <div className="flex bg-slate-700 rounded-lg p-0.5 flex-shrink-0 min-w-0">
           <button
             type="button"
             onClick={() => handleViewModeChange('overview')}
-            className={`flex items-center justify-center px-1.5 sm:px-2 md:px-3 py-1 sm:py-1.5 rounded-md text-xs font-medium transition-all min-w-0 ${
-              viewMode === 'overview'
-                ? 'bg-blue-600 text-white shadow-sm'
-                : 'text-slate-300 hover:text-white hover:bg-slate-600'
-            }`}
+            className={`flex items-center justify-center px-1.5 md:px-2 py-1 rounded-md text-xs font-medium transition-all ${viewMode === 'overview'
+              ? 'bg-blue-600 text-white shadow-sm'
+              : 'text-slate-300 hover:text-white hover:bg-slate-600'
+              }`}
             title="Overview"
           >
-            <Eye className="h-3 w-3 sm:h-3.5 sm:w-3.5 flex-shrink-0" />
-            <span className="hidden sm:inline ml-1 whitespace-nowrap">Overview</span>
+            <Eye className="h-3 w-3 md:h-3.5 md:w-3.5 flex-shrink-0" />
+            <span className="hidden lg:inline ml-1">Overview</span>
           </button>
 
           <button
             type="button"
             onClick={() => handleViewModeChange('structured')}
-            className={`flex items-center justify-center px-1.5 sm:px-2 md:px-3 py-1 sm:py-1.5 rounded-md text-xs font-medium transition-all min-w-0 ${
-              viewMode === 'structured'
-                ? 'bg-blue-600 text-white shadow-sm'
-                : 'text-slate-300 hover:text-white hover:bg-slate-600'
-            }`}
+            className={`flex items-center justify-center px-1.5 md:px-2 py-1 rounded-md text-xs font-medium transition-all ${viewMode === 'structured'
+              ? 'bg-blue-600 text-white shadow-sm'
+              : 'text-slate-300 hover:text-white hover:bg-slate-600'
+              }`}
             title="Structured"
           >
-            <FileText className="h-3 w-3 sm:h-3.5 sm:w-3.5 flex-shrink-0" />
-            <span className="hidden sm:inline ml-1 whitespace-nowrap">Structured</span>
+            <MessageSquare className="h-3 w-3 md:h-3.5 md:w-3.5 flex-shrink-0" />
+            <span className="hidden lg:inline ml-1">Structured</span>
           </button>
 
           <button
             type="button"
             onClick={() => handleViewModeChange('scratchpad')}
-            className={`flex items-center justify-center px-1.5 sm:px-2 md:px-3 py-1 sm:py-1.5 rounded-md text-xs font-medium transition-all min-w-0 ${
-              viewMode === 'scratchpad'
-                ? 'bg-blue-600 text-white shadow-sm'
-                : 'text-slate-300 hover:text-white hover:bg-slate-600'
-            }`}
+            className={`flex items-center justify-center px-1.5 md:px-2 py-1 rounded-md text-xs font-medium transition-all ${viewMode === 'scratchpad'
+              ? 'bg-blue-600 text-white shadow-sm'
+              : 'text-slate-300 hover:text-white hover:bg-slate-600'
+              }`}
             title="Scratchpad"
           >
-            <Lightbulb className="h-3 w-3 sm:h-3.5 sm:w-3.5 flex-shrink-0" />
-            <span className="hidden sm:inline ml-1 whitespace-nowrap">Scratchpad</span>
+            <Lightbulb className="h-3 w-3 md:h-3.5 md:w-3.5 flex-shrink-0" />
+            <span className="hidden lg:inline ml-1">Scratchpad</span>
           </button>
         </div>
       </div>
 
       <div className="flex-1 overflow-hidden flex flex-col">
         {/* Enhanced Script Overview Content with Blended Support */}
-      {viewMode === 'overview' && (
-        <div className="flex-1 overflow-y-auto p-6">
-          {/* DEBUG INFO - Remove after testing */}
-          {process.env.NODE_ENV === 'development' && (
-            <div className="mb-4 p-3 bg-blue-900/20 border border-blue-500/30 rounded text-xs">
-              <div><strong>DEBUG:</strong></div>
-              <div>Summary available: {!!chunkedFeedback?.summary ? 'YES' : 'NO'}</div>
-              <div>Overall structure: {chunkedFeedback?.summary?.overallStructure ? 'YES' : 'NO'}</div>
-              <div>Chunks: {chunkedFeedback?.chunks?.length || 0}</div>
-              <div>Successful chunks: {chunkedFeedback?.chunks?.filter(c => !(c as any).processingError).length || 0}</div>
-              <div>Is blended: {isBlended ? 'YES' : 'NO'}</div>
-            </div>
-          )}
-
-          <div className="space-y-4 text-sm leading-relaxed">
+        {viewMode === 'overview' && (
+          <div className="flex-1 overflow-y-auto p-6">
+            <div className="space-y-4 text-sm leading-relaxed">
               {/* Blended Analysis Indicator */}
               {isBlended && (
                 <div className="bg-purple-500/10 border border-purple-500/20 rounded-lg p-4 mb-4">
@@ -503,6 +422,31 @@ return (
                 </div>
               )}
 
+              {/* AI-Generated Overview */}
+              <div className="bg-slate-700/20 rounded-lg p-4 border border-slate-600/30 mb-6">
+                <h4 className="text-sm font-semibold text-yellow-400 mb-3">
+                  {isBlended ? 'Multi-Mentor Analysis Summary' : `${mentor.name}'s Analysis Summary`}
+                </h4>
+                <div className="text-slate-300 text-sm leading-relaxed">
+                  {isGeneratingOverview ? (
+                    <div className="flex items-center justify-center py-4">
+                      <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-yellow-400 mr-2"></div>
+                      <span>Generating overview...</span>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {overviewContent ? (
+                        overviewContent.split('\n\n').map((paragraph, index) => (
+                          <p key={index} className="text-slate-300">{paragraph}</p>
+                        ))
+                      ) : (
+                        <p className="text-slate-400 italic">Overview generation failed. Please try again.</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+
               {/* Structural Assessment */}
               <div className="bg-slate-800/50 rounded-lg p-4">
                 <div className="flex items-center gap-2 mb-3">
@@ -512,71 +456,7 @@ return (
                   </span>
                 </div>
                 <p className="text-slate-300 mb-3">
-                  {overview?.structuralAnalysis?.assessment || 'Analysis unavailable.'}
-                </p>
-                <p className="text-slate-300">
-                  {overview?.structuralAnalysis?.recommendation || 'Please ensure script is properly processed.'}
-                </p>
-              </div>
-
-              {/* Character Development */}
-              <div className="bg-slate-800/50 rounded-lg p-4">
-                <div className="flex items-center gap-2 mb-3">
-                  <Users className="h-4 w-4 text-green-400" />
-                  <span className="font-medium text-green-400">
-                    {isBlended ? 'Multi-Mentor Character Development' : 'Character Development'}
-                  </span>
-                </div>
-                <p className="text-slate-300 mb-3">
-                  {overview?.characterAnalysis?.assessment || 'Analysis unavailable.'}
-                </p>
-                <p className="text-slate-300">
-                  {overview?.characterAnalysis?.recommendation || 'Please ensure script is properly processed.'}
-                </p>
-              </div>
-
-              {/* Dialogue & Voice */}
-              <div className="bg-slate-800/50 rounded-lg p-4">
-                <div className="flex items-center gap-2 mb-3">
-                  <MessageSquare className="h-4 w-4 text-yellow-400" />
-                  <span className="font-medium text-yellow-400">
-                    {isBlended ? 'Blended Dialogue & Voice Analysis' : 'Dialogue & Voice'}
-                  </span>
-                </div>
-                <p className="text-slate-300 mb-3">
-                  {overview?.dialogueAnalysis?.assessment || 'Analysis unavailable.'}
-                </p>
-                <p className="text-slate-300">
-                  {overview?.dialogueAnalysis?.recommendation || 'Please ensure script is properly processed.'}
-                </p>
-              </div>
-
-              {/* Pacing & Flow */}
-              <div className="bg-slate-800/50 rounded-lg p-4">
-                <div className="flex items-center gap-2 mb-3">
-                  <Zap className="h-4 w-4 text-orange-400" />
-                  <span className="font-medium text-orange-400">
-                    {isBlended ? 'Multi-Perspective Pacing & Momentum' : 'Pacing & Momentum'}
-                  </span>
-                </div>
-                <p className="text-slate-300 mb-3">
-                  {overview?.pacingAnalysis?.assessment || 'Analysis unavailable.'}
-                </p>
-                <p className="text-slate-300">
-                  {overview?.pacingAnalysis?.recommendation || 'Please ensure script is properly processed.'}
-                </p>
-              </div>
-
-              {/* Overall Assessment */}
-              <div className="bg-gradient-to-r from-slate-800/80 to-slate-700/80 rounded-lg p-4 border border-slate-600/30">
-                <div className="flex items-center gap-2 mb-3">
-                  <Target className="h-4 w-4" style={{ color: mentor.accent }} />
-                  <span className="font-medium" style={{ color: mentor.accent }}>
-                    {isBlended ? 'Blended Mentoring Assessment' : `${mentor.name}'s Overall Assessment`}
-                  </span>
-                </div>
-                <p className="text-slate-200 leading-relaxed">
-                  {overview?.overallAssessment || 'Overall assessment unavailable. Please ensure script is properly processed.'}
+                  {chunkedFeedback.summary?.overallStructure || 'Analysis unavailable.'}
                 </p>
               </div>
 
@@ -660,7 +540,7 @@ return (
                   
                   return (
                     <div key={chunk.chunkId} className="bg-slate-700/20 rounded-lg border border-slate-600/30">
-                      {/* Enhanced Chunk Header with Status - REMOVED timestamps and word counts */}
+                      {/* Enhanced Chunk Header with Status */}
                       <div className="w-full p-3 flex items-center justify-between hover:bg-slate-600/20 transition-colors">
                         <div
                           onClick={() => toggleChunk(chunk.chunkId)}
@@ -790,6 +670,35 @@ return (
           </>
         )}
 
+        {/* Enhanced Global Recommendations Footer with Blended Support */}
+        {chunkedFeedback.summary?.globalRecommendations && chunkedFeedback.summary.globalRecommendations.length > 0 && (
+          <div className="p-4 bg-slate-700/30 border-t border-slate-600/50 flex-shrink-0">
+            <div className="flex items-center gap-2 mb-3">
+              <Target className="h-4 w-4 text-purple-400" />
+              <h4 className="font-medium text-white text-sm">
+                {isBlended ? 'Blended Mentoring Recommendations' : `${mentor.name}'s Overall Recommendations`}
+              </h4>
+            </div>
+            <div className="space-y-2">
+              {chunkedFeedback.summary.globalRecommendations.map((rec, index) => (
+                <div key={index} className="flex items-start gap-2">
+                  <div className="w-1.5 h-1.5 rounded-full bg-purple-400 mt-2 flex-shrink-0"></div>
+                  <p className="text-slate-300 text-sm">{rec}</p>
+                </div>
+              ))}
+            </div>
+            
+            <div className="mt-4 pt-3 border-t border-slate-600/30 text-center">
+              <p className="text-sm text-yellow-400 italic">
+                "{mentor.mantra || 'Every word must earn its place on the page.'}"
+              </p>
+              <p className="text-xs text-slate-400 mt-1">
+                — {isBlended ? 'Blended Mentoring Philosophy' : mentor.name}
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Processing Stats Footer with Enhanced Blended Support */}
         {(chunkedFeedback as any).processingStats && (
           <div className="p-3 bg-slate-900 border-t border-slate-700 text-xs text-slate-400">
@@ -809,174 +718,6 @@ return (
       </div>
     </div>
   );
-};
-
-// Enhanced analysis helper functions with blended feedback support
-const analyzeScriptStructure = (chunks: ChunkFeedback[], isBlended: boolean = false) => {
-  if (!chunks || chunks.length === 0) {
-    return {
-      assessment: "Script structure analysis unavailable due to missing chunk data.",
-      recommendation: "Please ensure the script has been properly processed for detailed structural analysis."
-    };
-  }
-
-  const successfulChunks = chunks.filter(chunk => !(chunk as any).processingError);
-  const hasStructuralIssues = successfulChunks.some(chunk => 
-    chunk?.structuredContent?.toLowerCase().includes('structure') && 
-    (chunk.structuredContent.toLowerCase().includes('weak') || chunk.structuredContent.toLowerCase().includes('unclear'))
-  );
-
-  const structuralStrengths = successfulChunks.filter(chunk => 
-    chunk?.structuredContent?.toLowerCase().includes('structure') && 
-    (chunk.structuredContent.toLowerCase().includes('strong') || chunk.structuredContent.toLowerCase().includes('well'))
-  ).length;
-
-  const blendedPrefix = isBlended ? "Blended mentor analysis reveals that " : "";
-  const blendedContext = isBlended ? " from multiple mentoring perspectives" : "";
-
-  if (structuralStrengths > successfulChunks.length / 2) {
-    return {
-      assessment: `${blendedPrefix}the script demonstrates solid structural foundations across most sections. The narrative architecture supports the story effectively${blendedContext}, with clear scene purposes and logical progression. Each section contributes meaningfully to the overall dramatic arc.`,
-      recommendation: `Continue to maintain this structural integrity while looking for opportunities to further tighten connections between sections and enhance the overall story engine${isBlended ? ', considering insights from all mentoring approaches' : ''}.`
-    };
-  } else if (hasStructuralIssues) {
-    return {
-      assessment: `${blendedPrefix}the script shows structural inconsistencies that may weaken the overall narrative impact. Some sections lack clear purpose or connection to the central story engine, creating potential pacing and clarity issues${blendedContext}.`,
-      recommendation: `Focus on clarifying each section's role in the larger story${blendedContext}. Ensure every scene advances plot, reveals character, or builds toward key story moments. Consider restructuring or combining sections that feel disconnected.`
-    };
-  } else {
-    return {
-      assessment: `${blendedPrefix}the script's structure is functional but has room for enhancement. While the basic narrative framework is present, the connections between sections could be strengthened${blendedContext} to create a more compelling dramatic throughline.`,
-      recommendation: `Review the story spine to ensure each section builds momentum toward key dramatic beats${isBlended ? ', incorporating diverse mentoring insights' : ''}. Look for opportunities to create stronger cause-and-effect relationships between scenes.`
-    };
-  }
-};
-
-const analyzeCharacterPresence = (chunks: ChunkFeedback[], isBlended: boolean = false) => {
-  if (!chunks || chunks.length === 0) {
-    return {
-      assessment: "Character analysis unavailable due to missing chunk data.",
-      recommendation: "Please ensure the script has been properly processed for character analysis."
-    };
-  }
-
-  const successfulChunks = chunks.filter(chunk => !(chunk as any).processingError);
-  const characterConsistency = successfulChunks.filter(chunk => 
-    chunk?.structuredContent?.toLowerCase().includes('character') && 
-    chunk.structuredContent.toLowerCase().includes('consistent')
-  ).length;
-
-  const blendedPrefix = isBlended ? "Multi-mentor character analysis shows " : "";
-  const blendedContext = isBlended ? " across different mentoring perspectives" : "";
-
-  if (characterConsistency > successfulChunks.length / 3) {
-    return {
-      assessment: `${blendedPrefix}character development shows strong consistency across sections. Characters maintain distinct voices and clear motivations that drive their actions throughout the script${blendedContext}. The character arcs are well-established and support the central narrative.`,
-      recommendation: `Continue developing the subtle character moments and relationship dynamics${isBlended ? ', leveraging insights from multiple mentoring approaches' : ''}. Look for opportunities to deepen character complexity through subtext and behavior rather than exposition.`
-    };
-  } else {
-    return {
-      assessment: `${blendedPrefix}character development varies across sections, with some characters feeling more fully realized than others. There are opportunities to strengthen character consistency${blendedContext} and ensure each character serves a clear dramatic function throughout the script.`,
-      recommendation: `Audit each character's journey across all sections${blendedContext}. Ensure they have clear, active objectives in every scene and that their choices reflect established character traits and growth patterns.`
-    };
-  }
-};
-
-const analyzeDialoguePatterns = (chunks: ChunkFeedback[], isBlended: boolean = false) => {
-  if (!chunks || chunks.length === 0) {
-    return {
-      assessment: "Dialogue analysis unavailable due to missing chunk data.",
-      recommendation: "Please ensure the script has been properly processed for dialogue analysis."
-    };
-  }
-
-  const successfulChunks = chunks.filter(chunk => !(chunk as any).processingError);
-  const dialogueStrengths = successfulChunks.filter(chunk => 
-    chunk?.structuredContent?.toLowerCase().includes('dialogue') && 
-    (chunk.structuredContent.toLowerCase().includes('strong') || chunk.structuredContent.toLowerCase().includes('effective'))
-  ).length;
-
-  const dialogueIssues = successfulChunks.filter(chunk => 
-    chunk?.structuredContent?.toLowerCase().includes('dialogue') && 
-    (chunk.structuredContent.toLowerCase().includes('weak') || chunk.structuredContent.toLowerCase().includes('needs'))
-  ).length;
-
-  const blendedPrefix = isBlended ? "Blended dialogue analysis reveals " : "";
-  const blendedContext = isBlended ? " from multiple mentoring viewpoints" : "";
-
-  if (dialogueStrengths > dialogueIssues) {
-    return {
-      assessment: `${blendedPrefix}the dialogue demonstrates strong craft across most sections. Characters speak with distinct voices that reveal personality and advance the story efficiently${blendedContext}. The dialogue feels natural while serving multiple dramatic purposes simultaneously.`,
-      recommendation: `Continue refining the dialogue's subtext and ensuring every exchange serves story and character goals${isBlended ? ', incorporating diverse mentoring insights on dialogue craft' : ''}. Look for opportunities to let characters communicate through behavior as much as words.`
-    };
-  } else {
-    return {
-      assessment: `${blendedPrefix}dialogue quality varies throughout the script, with some sections feeling more natural and purposeful than others. There are opportunities to strengthen character voice distinction${blendedContext} and ensure dialogue serves multiple story functions.`,
-      recommendation: `Focus on making each character's speech patterns unique and ensuring dialogue advances plot, reveals character, or builds conflict${blendedContext}. Eliminate purely expository exchanges in favor of more organic character interactions.`
-    };
-  }
-};
-
-const analyzePacingFlow = (chunks: ChunkFeedback[], isBlended: boolean = false) => {
-  if (!chunks || chunks.length === 0) {
-    return {
-      assessment: "Pacing analysis unavailable due to missing chunk data.",
-      recommendation: "Please ensure the script has been properly processed for pacing analysis."
-    };
-  }
-
-  const successfulChunks = chunks.filter(chunk => !(chunk as any).processingError);
-  const pacingIssues = successfulChunks.filter(chunk => 
-    chunk?.structuredContent?.toLowerCase().includes('pacing') && 
-    (chunk.structuredContent.toLowerCase().includes('slow') || chunk.structuredContent.toLowerCase().includes('rushed'))
-  ).length;
-
-  const blendedPrefix = isBlended ? "Multi-perspective pacing analysis shows " : "";
-  const blendedContext = isBlended ? " across different mentoring approaches" : "";
-
-  if (pacingIssues < successfulChunks.length / 4) {
-    return {
-      assessment: `${blendedPrefix}the script maintains strong pacing throughout most sections. Scenes start efficiently, build appropriate tension, and conclude with forward momentum${blendedContext}. The rhythm varies appropriately to support different dramatic moments.`,
-      recommendation: `Fine-tune the pacing variations to enhance the emotional journey${isBlended ? ', considering insights from multiple mentoring styles' : ''}. Consider how scene length and intensity create the overall reading experience and audience engagement.`
-    };
-  } else {
-    return {
-      assessment: `${blendedPrefix}pacing shows inconsistencies across sections that may impact reader engagement and story flow${blendedContext}. Some sections feel rushed while others lag, creating an uneven dramatic rhythm that could weaken overall script impact.`,
-      recommendation: `Review each section's pacing in context of the larger story${blendedContext}. Ensure scenes start as late as possible and end with compelling hooks. Balance action with reflection to create an engaging dramatic rhythm.`
-    };
-  }
-};
-
-const generateOverallAssessment = (chunks: ChunkFeedback[], summary: any, mentor: any, isBlended: boolean = false) => {
-  const sectionsCount = chunks?.length || 0;
-  const successfulCount = chunks?.filter(chunk => !(chunk as any).processingError).length || 0;
-  const mentorName = mentor?.name || 'Unknown Mentor';
-  
-  if (sectionsCount === 0) {
-    return "Script analysis is incomplete. Please ensure all sections have been properly processed to generate a comprehensive assessment.";
-  }
-
-  if (isBlended) {
-    return `This ${sectionsCount}-section script analysis combines insights from multiple mentoring perspectives to provide comprehensive guidance. With ${successfulCount} sections successfully analyzed, the blended approach reveals both consensus strengths and diverse viewpoints on areas for improvement. The multi-mentor analysis shows promise in the script's foundation while identifying specific opportunities for enhancement across structure, character development, dialogue craft, and pacing flow. This comprehensive perspective offers writers the benefit of diverse mentoring approaches, allowing for more nuanced and complete script development.`;
-  }
-  
-  // Mentor-specific assessment style (keeping existing logic)
-  switch (mentor?.id) {
-    case 'tony-gilroy':
-      return `This ${sectionsCount}-section script shows promise but needs focused attention on its story engine. The core dramatic spine needs strengthening to ensure every scene serves the central narrative drive. While individual moments may work, the overall machinery of story could be more efficient. Cut what doesn't serve the engine, clarify character objectives, and ensure each section builds inevitable momentum toward your story's destination.`;
-    
-    case 'sofia-coppola':
-      return `Across these ${sectionsCount} sections, there's an opportunity to trust more in the emotional authenticity and atmospheric details that make stories resonate. The script has moments of genuine feeling, but could benefit from more confidence in subtext and silence. Focus on the internal landscapes of your characters and let the environment reflect their psychological states. The most powerful moments often happen between the lines.`;
-    
-    case 'vince-gilligan':
-      return `This ${sectionsCount}-section analysis reveals a script with potential that needs deeper exploration of character psychology and consequence. The foundation is there, but the character choices need more psychological truth and inevitable outcomes. Every decision should feel both surprising and absolutely right for these specific characters. Build the moral complexity that makes audiences wrestle with right and wrong.`;
-    
-    case 'amy-pascal':
-      return `Looking at these ${sectionsCount} sections, the script needs stronger audience connection points and clearer emotional stakes. While the story elements are present, the universal human truths need to shine through more clearly. Focus on making the audience care deeply about these characters by finding the relatable struggles beneath the specific circumstances. The emotional journey is what will make this script memorable.`;
-    
-    default:
-      return `This ${sectionsCount}-section script analysis reveals both strengths and opportunities for development. The foundation shows solid craft, but the execution needs refinement across character development, dialogue efficiency, and structural clarity. Focus on serving the story's central purpose while ensuring each section contributes meaningfully to the overall dramatic arc. With targeted revisions, this script can achieve its full potential.`;
-  }
 };
 
 // Helper function to format feedback text (keeping existing functionality)

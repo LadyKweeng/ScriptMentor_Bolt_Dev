@@ -11,6 +11,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import ChunkedFeedbackView from './ChunkedFeedbackView';
+import { backendApiService } from '../services/backendApiService';
 
 interface FeedbackViewProps {
   feedback: Feedback;
@@ -29,6 +30,8 @@ const FeedbackView: React.FC<FeedbackViewProps> = ({
 }) => {
   const [viewMode, setViewMode] = useState<'overview' | 'structured' | 'scratchpad'>('overview');
   const [copiedText, setCopiedText] = useState('');
+  const [overviewContent, setOverviewContent] = useState<string>('');
+  const [isGeneratingOverview, setIsGeneratingOverview] = useState(false);
 
   useEffect(() => {
     // Map feedbackMode to viewMode
@@ -40,6 +43,13 @@ const FeedbackView: React.FC<FeedbackViewProps> = ({
       setViewMode('overview');
     }
   }, [feedback.id, feedbackMode]);
+
+  useEffect(() => {
+    // Generate overview when feedback changes or when switching to overview mode
+    if (viewMode === 'overview' && !overviewContent) {
+      generateOverview();
+    }
+  }, [feedback.id, viewMode]);
 
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
@@ -54,6 +64,142 @@ const FeedbackView: React.FC<FeedbackViewProps> = ({
     if (mode !== 'overview' && onModeChange) {
       onModeChange(mode as FeedbackMode);
     }
+  };
+
+  // Generate AI overview based on feedback content
+  const generateOverview = async () => {
+    try {
+      setIsGeneratingOverview(true);
+      
+      // Get content from both structured and scratchpad
+      const structuredContent = feedback.structuredContent || '';
+      const scratchpadContent = feedback.scratchpadContent || '';
+      
+      if (!structuredContent && !scratchpadContent) {
+        setOverviewContent('No feedback content available to generate an overview.');
+        return;
+      }
+      
+      // Create prompt for AI to generate overview
+      const prompt = `
+You are ${mentor.name}, a screenplay mentor with the following style:
+"${mentor.tone}"
+
+You've provided feedback on a screenplay scene. Based on your feedback, create a concise overview summary.
+
+The feedback you provided includes:
+
+STRUCTURED FEEDBACK:
+${structuredContent.substring(0, 1500)}
+
+SCRATCHPAD NOTES:
+${scratchpadContent.substring(0, 1500)}
+
+Write a 3-paragraph overview (2-3 sentences each) that summarizes your key insights about this screenplay.
+- Use your unique voice and perspective as ${mentor.name}
+- Focus on the most important points from both structured feedback and scratchpad notes
+- Maintain your specific mentoring style and tone
+- Write in paragraph form (not bullet points)
+- Be specific about the screenplay's strengths and weaknesses
+- End with your overall assessment and most important recommendation
+
+Your overview should sound like it was written by you personally, not generated.
+`;
+
+      try {
+        // Use backendApiService to generate the overview
+        const overview = await backendApiService.generateAnalysis({
+          prompt,
+          analysisType: 'overview',
+          model: 'gpt-4o-mini',
+          temperature: 0.7
+        });
+        
+        if (overview) {
+          setOverviewContent(overview);
+        } else {
+          // Fallback if API fails
+          setOverviewContent(generateFallbackOverview(feedback, mentor));
+        }
+      } catch (error) {
+        console.error('Failed to generate AI overview:', error);
+        setOverviewContent(generateFallbackOverview(feedback, mentor));
+      }
+    } finally {
+      setIsGeneratingOverview(false);
+    }
+  };
+
+  // Generate a fallback overview if AI generation fails
+  const generateFallbackOverview = (feedback: Feedback, mentor: Mentor): string => {
+    const isBlended = mentor.id === 'blended';
+    
+    // Extract key points from feedback
+    const structuredContent = feedback.structuredContent || '';
+    const scratchpadContent = feedback.scratchpadContent || '';
+    
+    // Get first few sentences from each section
+    const getFirstSentences = (text: string, count: number = 3): string => {
+      const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 0).slice(0, count);
+      return sentences.join('. ') + '.';
+    };
+    
+    const structuredSummary = getFirstSentences(structuredContent);
+    const scratchpadSummary = getFirstSentences(scratchpadContent);
+    
+    // Create paragraphs based on mentor style
+    let overview = '';
+    
+    if (isBlended) {
+      overview = `This script presents a blend of strengths and challenges when viewed through multiple mentoring perspectives. The structure shows potential but requires refinement to fully realize its dramatic potential. The character work contains promising elements that could be enhanced through more specific choices and clearer objectives.\n\n`;
+      
+      overview += `From a dialogue perspective, there are moments of authenticity mixed with areas that need more subtext and purpose. The pacing varies throughout, with some sections moving effectively while others could benefit from tightening or expansion to better serve the story's rhythm. These observations represent a consensus across different mentoring approaches.\n\n`;
+      
+      overview += `Overall, this script demonstrates promise that can be fully realized through targeted revisions. By addressing the structural and character issues identified across multiple perspectives, while preserving the existing strengths, the screenplay can achieve a more compelling and cohesive form. The most critical next step is to ensure every scene serves the central dramatic engine while maintaining authentic character psychology.`;
+    } else {
+      switch (mentor.id) {
+        case 'tony-gilroy':
+          overview = `This script needs a clearer engine driving the narrative forward. The structure has potential but lacks the surgical precision needed to maintain momentum and purpose. Every scene must earn its place by advancing plot or revealing character in ways that feel inevitable yet surprising.\n\n`;
+          
+          overview += `The dialogue occasionally works but often falls into exposition or fails to reveal character through conflict. Look for opportunities to cut unnecessary exchanges and ensure every line serves multiple purposes - advancing story while revealing character simultaneously. The real drama often lies beneath the surface of what's being said.\n\n`;
+          
+          overview += `Overall, this screenplay requires a ruthless examination of what's essential versus what's merely interesting. Cut anything that doesn't directly serve your story engine, clarify character objectives in every scene, and ensure each moment creates inevitable momentum toward your conclusion. Remember: if nothing breaks when you remove a scene, it doesn't belong in your script.`;
+          break;
+          
+        case 'sofia-coppola':
+          overview = `This screenplay has moments of emotional authenticity that deserve to be amplified. The atmosphere and mood show potential, but could be more consistently developed to reflect the internal landscapes of your characters. There's room to trust silence and visual storytelling more deeply.\n\n`;
+          
+          overview += `Your character work contains promising elements, though the emotional truth sometimes gets buried under exposition. Look for opportunities to reveal feelings through behavior rather than dialogue, and trust that small, specific details often carry more emotional weight than explanations. The most powerful moments are often found in what remains unsaid.\n\n`;
+          
+          overview += `Overall, this script would benefit from a greater confidence in subtext and atmospheric detail. Focus on creating moments where environment and character psychology merge, where gestures reveal more than words, and where the audience is trusted to feel rather than be told. Remember that the truth lives in what isn't said - in the spaces between words.`;
+          break;
+          
+        case 'vince-gilligan':
+          overview = `This screenplay shows potential in its character foundations, though the psychological depth could be more consistently developed. The choices characters make sometimes feel driven by plot necessity rather than emerging organically from established traits and flaws. Every decision should feel both surprising and inevitable.\n\n`;
+          
+          overview += `The moral complexity of your story has interesting dimensions that could be further explored. Look for opportunities to place characters in situations where there are no clear right answers, where their core values come into conflict with their immediate needs. These impossible choices reveal character truth in ways that simple obstacles cannot.\n\n`;
+          
+          overview += `Overall, this script would benefit from a deeper exploration of how character psychology drives plot, rather than the reverse. Ensure that each character's actions emerge from their specific flaws and desires, creating consequences that feel both unexpected and unavoidable. Remember that character is plot - what would this specific person actually do in this impossible situation?`;
+          break;
+          
+        case 'amy-pascal':
+          overview = `This screenplay has elements that audiences could connect with, though the emotional stakes need to be more consistently clear and relatable. The characters show potential, but their journeys would resonate more deeply if grounded in universal human experiences that viewers can immediately recognize and feel.\n\n`;
+          
+          overview += `The script balances artistic elements with commercial appeal, though this balance could be more consistent throughout. Look for opportunities to maintain your unique voice while ensuring the audience always understands what's at stake emotionally for your characters. The most successful stories combine artistic integrity with broad human connection.\n\n`;
+          
+          overview += `Overall, this screenplay would benefit from a sharper focus on making us care about these specific characters and their journey. Ensure that beneath the plot mechanics lies a recognizable emotional truth that resonates across different audiences. Remember that great scripts make you forget you're reading - they make you care.`;
+          break;
+          
+        default:
+          overview = `This screenplay shows both strengths and areas for development. The structure has promising elements but could be more consistently focused on driving the central narrative forward. Character motivations are sometimes clear but would benefit from more specific objectives and obstacles throughout.\n\n`;
+          
+          overview += `The dialogue contains effective moments mixed with areas that could be more efficient and purposeful. Look for opportunities to reveal character through subtext rather than exposition, and ensure each exchange serves multiple dramatic functions. The pacing varies throughout, with some sections moving effectively while others could be tightened.\n\n`;
+          
+          overview += `Overall, this script demonstrates potential that can be realized through targeted revisions. Focus on clarifying the central dramatic question, ensuring character choices emerge from established traits, and maintaining consistent momentum throughout. With these adjustments, the screenplay will achieve a more compelling and cohesive form.`;
+      }
+    }
+    
+    return overview;
   };
 
   // Check if this is chunked feedback
@@ -76,8 +222,8 @@ const FeedbackView: React.FC<FeedbackViewProps> = ({
       } else if (viewMode === 'structured') {
         return feedback.structuredContent || feedback.content || 'No structured content available for blended feedback.';
       } else {
-        // Overview mode - show summary or structured content
-        return feedback.structuredContent || feedback.content || 'No content available for overview.';
+        // Overview mode - show AI-generated overview or summary
+        return overviewContent || 'Generating overview...';
       }
     }
     
@@ -87,8 +233,8 @@ const FeedbackView: React.FC<FeedbackViewProps> = ({
     } else if (viewMode === 'structured') {
       return feedback.structuredContent || feedback.content || '';
     } else {
-      // Overview mode
-      return feedback.structuredContent || feedback.content || '';
+      // Overview mode - show AI-generated overview or summary
+      return overviewContent || 'Generating overview...';
     }
   };
 
@@ -201,7 +347,18 @@ const FeedbackView: React.FC<FeedbackViewProps> = ({
                   {isBlended ? 'Multi-Mentor Analysis Summary' : 'Scene Analysis Summary'}
                 </h4>
                 <div className="text-slate-300 text-sm leading-relaxed">
-                  {formatFeedbackText(getCurrentContent()).slice(0, 3)} {/* Show first 3 sections */}
+                  {isGeneratingOverview ? (
+                    <div className="flex items-center justify-center py-4">
+                      <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-yellow-400 mr-2"></div>
+                      <span>Generating overview...</span>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {overviewContent.split('\n\n').map((paragraph, index) => (
+                        <p key={index} className="text-slate-300">{paragraph}</p>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
               
