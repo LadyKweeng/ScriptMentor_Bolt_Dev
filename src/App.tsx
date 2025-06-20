@@ -2010,17 +2010,12 @@ if (session?.user) {
           )}
         </div>
         
-        {/* FIXED: Pass selectedMentor to RewriteSuggestions for proper mentor support */}
+        {/* Pass selectedChunkId to RewriteSuggestions for proper chunk support */}
         {showWriterSuggestions && (feedback || partialFeedback) && displayScene && (
           <div className="mt-6">
             <RewriteSuggestions
               originalScene={displayScene}
               feedback={feedback || partialFeedback!}
-<<<<<<< HEAD
-              mentor={selectedMentor}  // <-- ADD THIS LINE
-=======
-              mentor={selectedMentor}
->>>>>>> 597d86059b855d3861d12a9a86be22c7de351052
               selectedChunkId={selectedChunkId}
               onClose={() => setShowWriterSuggestions(false)}
             />
@@ -2177,7 +2172,7 @@ if (session?.user) {
                       chunks={currentScript?.chunks || []}
                       selectedChunkId={selectedChunkId}
                       onSelectChunk={handleChunkSelection}
-                      isChunkedScript={isChunkedScript ?? undefined}
+                      isChunkedScript={isChunkedScript}
                     />
                   </div>
                 </div>
