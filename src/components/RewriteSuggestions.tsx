@@ -23,9 +23,9 @@ import { writerAgentService } from '../services/writerAgentService';
 interface RewriteSuggestionsProps {
   feedback: Feedback;
   originalScene: ScriptScene | ScriptChunk;
-  mentor: Mentor;
   selectedChunkId?: string | null;
   onClose: () => void;
+  mentor?: Mentor; // Make mentor optional to prevent errors
 }
 
 interface WriterSuggestion {
@@ -43,9 +43,9 @@ interface WriterSuggestion {
 const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
   feedback,
   originalScene,
-  mentor,
   selectedChunkId,
-  onClose
+  onClose,
+  mentor
 }) => {
   const [suggestions, setSuggestions] = useState<WriterSuggestion[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -54,8 +54,9 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [selectedType, setSelectedType] = useState<string>('all');
 
-  const isBlended = feedback.mentorId === 'blended';
-  const isChunked = feedback.isChunked && feedback.chunkedFeedback;
+  // Determine if we have blended feedback and what type of scene we're working with
+  const isBlended = feedback?.mentorId === 'blended';
+  const isChunked = feedback?.isChunked && feedback?.chunkedFeedback;
   const sceneType = 'chunkType' in originalScene ? 'chunk' : 'scene';
 
   // Extract chunk feedback for chunked scripts
@@ -120,6 +121,9 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
   useEffect(() => {
     if (currentChunkFeedback && mentor) {
       generateWriterSuggestions();
+    } else if (currentChunkFeedback) {
+      // If we have feedback but no mentor, use a default mentor
+      generateWriterSuggestionsWithDefaultMentor();
     } else {
       setIsLoading(false);
     }
@@ -163,7 +167,10 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
         sceneType
       });
       
-      const response = await writerAgentService.generateWriterSuggestions(currentChunkFeedback, mentor);
+      const response = await writerAgentService.generateWriterSuggestions({
+        feedback: currentChunkFeedback,
+        mentor
+      });
       
       setSuggestions(response.suggestions || []);
       console.log('✅ Enhanced Writer suggestions loaded:', {
@@ -187,6 +194,57 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
       }
       
       setError(errorMessage);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Fallback function when mentor is not provided
+  const generateWriterSuggestionsWithDefaultMentor = async () => {
+    if (!currentChunkFeedback) {
+      console.error('❌ No feedback available');
+      setError('Feedback not available');
+      setIsLoading(false);
+      return;
+    }
+
+    // Create a default mentor
+    const defaultMentor: Mentor = {
+      id: feedback.mentorId || 'default',
+      name: feedback.mentorId === 'blended' ? 'Blended Mentors' : 'Script Mentor',
+      tone: 'Professional and insightful',
+      styleNotes: 'Provides clear, actionable feedback',
+      avatar: 'https://images.pexels.com/photos/7102/notes-macbook-study-conference.jpg?auto=compress&cs=tinysrgb&w=600',
+      accent: '#4B5563', // A neutral slate color
+      mantra: 'Every word must earn its place on the page.',
+      feedbackStyle: 'direct',
+      priorities: ['clarity', 'structure', 'character'],
+      analysisApproach: 'Balanced analysis of all screenplay elements'
+    };
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      console.log('✍️ Generating Writer Suggestions with default mentor...', {
+        mentorId: defaultMentor.id,
+        sceneId: originalScene.id,
+        isBlended: feedback.mentorId === 'blended',
+        sceneType
+      });
+      
+      const response = await writerAgentService.generateWriterSuggestions({
+        feedback: currentChunkFeedback,
+        mentor: defaultMentor
+      });
+      
+      setSuggestions(response.suggestions || []);
+      console.log('✅ Writer suggestions loaded with default mentor:', {
+        suggestionsCount: response.suggestions?.length || 0
+      });
+    } catch (err) {
+      console.error('❌ Failed to generate writer suggestions:', err);
+      setError('Failed to generate writer suggestions. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -253,21 +311,29 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
 
   const suggestionTypes = [...new Set(suggestions.map(s => s.type))];
 
+  // Get the accent color safely
+  const getAccentColor = () => {
+    if (mentor?.accent) {
+      return mentor.accent;
+    }
+    return isBlended ? '#8b5cf6' : '#4B5563'; // Purple for blended, slate for default
+  };
+
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <div className="bg-slate-800 rounded-xl w-full max-w-4xl max-h-[90vh] flex flex-col border border-slate-700 shadow-2xl">
         {/* ENHANCED: Header with chunked-style formatting */}
         <div 
           className="p-4 sm:p-6 bg-slate-900 border-b border-slate-700 flex items-center justify-between flex-shrink-0"
-          style={{ borderBottom: `2px solid ${mentor.accent}` }}
+          style={{ borderBottom: `2px solid ${getAccentColor()}` }}
         >
           {/* Left Section - Mentor & Scene Info */}
           <div className="flex items-center gap-4 min-w-0 flex-1">
             <img
-              src={mentor.avatar}
-              alt={mentor.name}
+              src={mentor?.avatar || 'https://images.pexels.com/photos/7102/notes-macbook-study-conference.jpg?auto=compress&cs=tinysrgb&w=600'}
+              alt={mentor?.name || 'Script Mentor'}
               className="w-10 h-10 rounded-full object-cover border-2 flex-shrink-0"
-              style={{ borderColor: mentor.accent }}
+              style={{ borderColor: getAccentColor() }}
             />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 mb-1">
@@ -288,7 +354,7 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
                 </div>
                 <div className="flex items-center gap-1">
                   <Users className="h-3 w-3" />
-                  <span>{mentor.name}</span>
+                  <span>{mentor?.name || (isBlended ? 'Blended Mentors' : 'Script Mentor')}</span>
                 </div>
                 {!isLoading && !error && (
                   <div className="flex items-center gap-1">
@@ -318,7 +384,7 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
                 <RefreshCw className="h-8 w-8 animate-spin text-yellow-400 mx-auto mb-4" />
                 <p className="text-white font-medium mb-2">Generating Enhanced Writer Suggestions</p>
                 <p className="text-slate-400 text-sm">
-                  {isBlended ? 'Analyzing blended mentor insights...' : `Applying ${mentor.name}'s expertise...`}
+                  {isBlended ? 'Analyzing blended mentor insights...' : `Applying ${mentor?.name || 'mentor'}'s expertise...`}
                 </p>
               </div>
             </div>
@@ -333,7 +399,11 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
                 <button
                   onClick={() => {
                     setError(null);
-                    generateWriterSuggestions();
+                    if (mentor) {
+                      generateWriterSuggestions();
+                    } else {
+                      generateWriterSuggestionsWithDefaultMentor();
+                    }
                   }}
                   className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-md transition-colors"
                   type="button"
@@ -355,7 +425,7 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
                       ? 'text-white border-b-2'
                       : 'text-slate-400 hover:text-white'
                   }`}
-                  style={{ borderBottomColor: selectedType === 'all' ? mentor.accent : 'transparent' }}
+                  style={{ borderBottomColor: selectedType === 'all' ? getAccentColor() : 'transparent' }}
                   type="button"
                 >
                   <Target className="h-4 w-4" />
@@ -371,7 +441,7 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
                         ? 'text-white border-b-2'
                         : 'text-slate-400 hover:text-white'
                     }`}
-                    style={{ borderBottomColor: selectedType === type ? mentor.accent : 'transparent' }}
+                    style={{ borderBottomColor: selectedType === type ? getAccentColor() : 'transparent' }}
                     type="button"
                   >
                     {getTypeIcon(type)}
@@ -471,7 +541,7 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
           <div className="p-4 bg-slate-900 border-t border-slate-700 text-xs text-slate-400">
             <div className="flex items-center justify-between">
               <span>
-                Enhanced writer suggestions • {isBlended ? 'Blended mentor insights' : `${mentor.name}'s expertise`}
+                Enhanced writer suggestions • {isBlended ? 'Blended mentor insights' : `${mentor?.name || 'Mentor'}'s expertise`}
               </span>
               <span>
                 Generated: {new Date().toLocaleString()}
