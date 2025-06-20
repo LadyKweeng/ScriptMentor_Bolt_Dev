@@ -635,7 +635,7 @@ const App: React.FC = () => {
                   </div>
                   
                   {/* Writer Suggestions */}
-                  {feedback && (
+                  {feedback && currentScene && (
                     <div className="mt-6">
                       <div className="flex justify-between items-center mb-3">
                         <h4 className="text-md font-medium flex items-center gap-2">
@@ -651,7 +651,7 @@ const App: React.FC = () => {
                         </button>
                       </div>
                       
-                      {showWriterSuggestions && currentScene && (
+                      {showWriterSuggestions && (
                         <RewriteSuggestions
                           originalScene={currentScene}
                           feedback={feedback}
