@@ -7,7 +7,6 @@ import ScriptUploader from './components/ScriptUploader';
 import SceneEditor from './components/SceneEditor';
 import FeedbackView from './components/FeedbackView';
 import CharacterMemoryPanel from './components/CharacterMemoryPanel';
-import ScriptDiff from './components/ScriptDiff';
 import RewriteSuggestions from './components/RewriteSuggestions';
 import ScriptLibrary from './components/ScriptLibrary';
 import ChunkSelector from './components/ChunkSelector';
