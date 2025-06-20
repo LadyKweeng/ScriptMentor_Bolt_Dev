@@ -23,7 +23,7 @@ import { writerAgentService } from '../services/writerAgentService';
 interface RewriteSuggestionsProps {
   feedback: Feedback;
   originalScene: ScriptScene | ScriptChunk;
-  mentor?: Mentor; // FIXED: Make mentor optional with proper validation
+  mentor: Mentor; // FIXED: Make mentor required and always validate
   selectedChunkId?: string | null;
   onClose: () => void;
   userId?: string; // NEW: Add userId for token integration
@@ -302,7 +302,7 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
         type: type,
         title: simple.note || `Writer Suggestion ${index + 1}`,
         description: simple.suggestion,
-        reasoning: `${mentor?.name || 'Mentor'} recommends: ${simple.suggestion}`,
+        reasoning: `${mentor.name} recommends: ${simple.suggestion}`,
         priority: priority,
         lineReference: `Based on feedback analysis`
       };
