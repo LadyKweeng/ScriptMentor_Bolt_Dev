@@ -4,15 +4,8 @@ import { tokenService } from './tokenService';
 
 // PRESERVED: Original interfaces
 export interface WriterSuggestion {
-  id: string;
-  type: 'dialogue' | 'action' | 'structure' | 'character' | 'pacing';
-  title: string;
-  description: string;
-  originalText?: string;
-  suggestedText?: string;
-  reasoning: string;
-  priority: 'high' | 'medium' | 'low';
-  lineReference?: string;
+  note: string;
+  suggestion: string;
 }
 
 export interface WriterSuggestionsResponse {
@@ -175,117 +168,42 @@ export class WriterAgentService {
         hasCategories: !!(feedback.categories && Object.keys(feedback.categories).length > 0)
       });
       
-      // IMPROVED: Add retry logic with exponential backoff
-      let retryCount = 0;
-      const maxRetries = 3;
-      let lastError: Error | null = null;
-
-      while (retryCount <= maxRetries) {
-        try {
-          const response = await fetch(`${this.baseUrl}/generate-writer-suggestions`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(requestPayload)
-          });
-      
-          if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            const errorMessage = `Writer Agent API Error: ${response.status} - ${errorData.error || response.statusText}`;
-            
-            // Check for rate limit errors (429 status code)
-            if (response.status === 429) {
-              const waitTimeMatch = errorMessage.match(/try again in (\d+\.\d+)s/);
-              let waitTime = Math.pow(2, retryCount) * 1000; // Default exponential backoff
-              
-              if (waitTimeMatch && waitTimeMatch[1]) {
-                waitTime = parseFloat(waitTimeMatch[1]) * 1000 + 1000; // Convert to ms and add 1 second buffer
-              }
-              
-              console.log(`🕒 Rate limit hit, waiting for ${waitTime/1000} seconds before retry...`);
-              
-              // Wait for the specified time
-              await new Promise(resolve => setTimeout(resolve, waitTime));
-              
-              // Increment retry count and try again
-              retryCount++;
-              continue;
-            }
-            
-            throw new Error(errorMessage);
-          }
-      
-          const data = await response.json();
-          
-          if (!data.success) {
-            throw new Error(data.error || 'Writer suggestions generation failed');
-          }
-      
-          console.log('✅ Writer suggestions generated successfully:', {
-            suggestionsCount: data.suggestions?.length || 0,
-            mentor: mentor.name,
-            isBlended: mentor.id === 'blended',
-            source: 'API'
-          });
-      
-          // Ensure suggestions have proper structure
-          if (data.suggestions && Array.isArray(data.suggestions)) {
-            // Add IDs to suggestions if they don't have them
-            data.suggestions = data.suggestions.map((suggestion, index) => ({
-              id: suggestion.id || `suggestion-${Date.now()}-${index}`,
-              ...suggestion
-            }));
-          }
-          
-          return data;
-        } catch (error) {
-          // Store the error for potential re-throw
-          lastError = error instanceof Error ? error : new Error(String(error));
-          
-          // Check for rate limit errors in the error message
-          if (lastError.message.includes('rate limit') || 
-              lastError.message.includes('429') || 
-              lastError.message.includes('try again in')) {
-            
-            // Extract wait time if available
-            const waitTimeMatch = lastError.message.match(/try again in (\d+\.\d+)s/);
-            let waitTime = Math.pow(2, retryCount) * 1000; // Default exponential backoff
-            
-            if (waitTimeMatch && waitTimeMatch[1]) {
-              waitTime = parseFloat(waitTimeMatch[1]) * 1000 + 1000; // Convert to ms and add 1 second buffer
-            }
-            
-            console.log(`🕒 Rate limit detected, waiting for ${waitTime/1000} seconds before retry...`);
-            
-            // Wait for the specified time
-            await new Promise(resolve => setTimeout(resolve, waitTime));
-            
-            // Increment retry count and try again
-            retryCount++;
-            continue;
-          }
-          
-          // If we've reached max retries or it's not a rate limit error, break the loop
-          if (retryCount >= maxRetries || 
-              !(lastError.message.includes('rate limit') || 
-                lastError.message.includes('429') || 
-                lastError.message.includes('try again in'))) {
-            break;
-          }
-          
-          // Otherwise, use exponential backoff
-          const backoffTime = Math.pow(2, retryCount) * 1000;
-          console.log(`⏱️ Retrying after ${backoffTime/1000} seconds (attempt ${retryCount + 1}/${maxRetries + 1})...`);
-          
-          await new Promise(resolve => setTimeout(resolve, backoffTime));
-          retryCount++;
-        }
+      const response = await fetch(`${this.baseUrl}/generate-writer-suggestions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestPayload)
+      });
+  
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        console.warn('❌ Writer Agent API failed, falling back to enhanced mock suggestions:', {
+          status: response.status,
+          error: errorData.error || response.statusText,
+          isBlended: mentor.id === 'blended'
+        });
+        
+        // PRESERVED: Fall back to enhanced mock suggestions
+        return this.generateEnhancedMockSuggestions(feedback, mentor);
       }
+  
+      const data = await response.json();
       
-      // If we've exhausted all retries or encountered a non-rate-limit error, fall back to mock suggestions
-      console.warn('❌ Writer Agent API failed, falling back to enhanced mock suggestions:', lastError);
-      return this.generateEnhancedMockSuggestions(feedback, mentor);
+      if (!data.success) {
+        console.warn('❌ Writer Agent returned unsuccessful response, falling back to enhanced mock suggestions:', data.error);
+        return this.generateEnhancedMockSuggestions(feedback, mentor);
+      }
+  
+      console.log('✅ Writer suggestions generated successfully:', {
+        suggestionsCount: data.suggestions?.length || 0,
+        mentor: mentor.name,
+        isBlended: mentor.id === 'blended',
+        source: 'API'
+      });
+  
+      return data;
+  
     } catch (error) {
       console.warn('❌ Writer Agent API failed, falling back to enhanced mock suggestions:', error);
       
@@ -445,69 +363,33 @@ export class WriterAgentService {
       // PRESERVED: Generate blended suggestions that combine multiple perspectives
       const blendedIssues = this.extractBlendedIssuesFromFeedback(feedbackText);
       
-      blendedIssues.forEach((issue, index) => {
+      blendedIssues.forEach(issue => {
         const suggestion = this.generateBlendedSuggestionForIssue(issue);
         if (suggestion) {
-          suggestions.push({
-            id: `blended-suggestion-${Date.now()}-${index}`,
-            type: ['dialogue', 'structure', 'character', 'action', 'pacing'][index % 5] as any,
-            title: issue,
-            description: suggestion.note,
-            reasoning: suggestion.suggestion,
-            priority: ['high', 'medium', 'low'][index % 3] as any,
-            originalText: index % 2 === 0 ? 'Original text would appear here' : undefined,
-            suggestedText: index % 2 === 0 ? 'Suggested improved text would appear here' : undefined
-          });
+          suggestions.push(suggestion);
         }
       });
       
       // PRESERVED: Ensure we have comprehensive blended suggestions
       if (suggestions.length < 3) {
         const defaultBlendedSuggestions = this.getDefaultBlendedSuggestions();
-        defaultBlendedSuggestions.slice(0, 4 - suggestions.length).forEach((suggestion, index) => {
-          suggestions.push({
-            id: `default-blended-suggestion-${Date.now()}-${index}`,
-            type: ['dialogue', 'structure', 'character', 'action', 'pacing'][index % 5] as any,
-            title: suggestion.note,
-            description: suggestion.note,
-            reasoning: suggestion.suggestion,
-            priority: ['medium', 'high', 'low'][index % 3] as any
-          });
-        });
+        suggestions.push(...defaultBlendedSuggestions.slice(0, 4 - suggestions.length));
       }
     } else {
       // PRESERVED: Generate regular mentor-specific suggestions
       const issues = this.extractIssuesFromFeedback(feedbackText, mentor);
       
-      issues.forEach((issue, index) => {
+      issues.forEach(issue => {
         const suggestion = this.generateSuggestionForIssue(issue, mentor);
         if (suggestion) {
-          suggestions.push({
-            id: `suggestion-${Date.now()}-${index}`,
-            type: ['dialogue', 'structure', 'character', 'action', 'pacing'][index % 5] as any,
-            title: issue,
-            description: issue,
-            reasoning: suggestion,
-            priority: ['high', 'medium', 'low'][index % 3] as any,
-            originalText: index % 2 === 0 ? 'Original text would appear here' : undefined,
-            suggestedText: index % 2 === 0 ? 'Suggested improved text would appear here' : undefined
-          });
+          suggestions.push(suggestion);
         }
       });
 
       // PRESERVED: Ensure we have at least 2-3 suggestions
       if (suggestions.length < 2) {
         const defaultSuggestions = this.getDefaultSuggestions(mentor);
-        defaultSuggestions.slice(0, 3 - suggestions.length).forEach((suggestion, index) => {
-          suggestions.push({
-            id: `default-suggestion-${Date.now()}-${index}`,
-            type: ['dialogue', 'structure', 'character', 'action', 'pacing'][index % 5] as any,
-            title: suggestion,
-            description: suggestion,
-            reasoning: suggestion,
-            priority: ['medium', 'high', 'low'][index % 3] as any
-          });
-        });
+        suggestions.push(...defaultSuggestions.slice(0, 3 - suggestions.length));
       }
     }
 
@@ -590,7 +472,7 @@ export class WriterAgentService {
   /**
    * PRESERVED: Generate blended suggestions that combine multiple mentoring perspectives
    */
-  private generateBlendedSuggestionForIssue(issue: string): { note: string; suggestion: string } | null {
+  private generateBlendedSuggestionForIssue(issue: string): WriterSuggestion | null {
     const blendedSuggestions: Record<string, string> = {
       'Multiple mentors agree this area needs attention': 'Address this priority area by combining Tony Gilroy\'s precision cuts with Sofia Coppola\'s atmospheric details and Vince Gilligan\'s character psychology.',
       'Blended approach reveals deeper issues': 'Use Amy Pascal\'s audience connection principles while applying Tony Gilroy\'s story engine clarity and Sofia Coppola\'s emotional authenticity.',
@@ -620,7 +502,7 @@ export class WriterAgentService {
   /**
    * PRESERVED: Get default blended suggestions that combine multiple mentoring perspectives
    */
-  private getDefaultBlendedSuggestions(): { note: string; suggestion: string }[] {
+  private getDefaultBlendedSuggestions(): WriterSuggestion[] {
     return [
       { 
         note: 'Scene needs multi-perspective refinement', 
@@ -773,7 +655,7 @@ export class WriterAgentService {
   /**
    * PRESERVED: Generate a suggestion for a specific issue with mentor-specific advice
    */
-  private generateSuggestionForIssue(issue: string, mentor: Mentor): string {
+  private generateSuggestionForIssue(issue: string, mentor: Mentor): WriterSuggestion | null {
     const suggestions: Record<string, Record<string, string>> = {
       'tony-gilroy': {
         'Dialogue feels unnatural or expository': 'Cut any dialogue that doesn\'t advance plot or reveal character. Make every line count.',
@@ -831,43 +713,52 @@ export class WriterAgentService {
     };
 
     const mentorSuggestions = suggestions[mentor.id] || suggestions['tony-gilroy'];
-    return mentorSuggestions[issue] || 'Improve this aspect based on the feedback provided.';
+    const suggestion = mentorSuggestions[issue];
+
+    if (suggestion) {
+      return {
+        note: issue,
+        suggestion
+      };
+    }
+
+    return null;
   }
 
   /**
    * PRESERVED: Get default suggestions for each mentor with improved quality
    */
-  private getDefaultSuggestions(mentor: Mentor): string[] {
-    const defaults: Record<string, string[]> = {
+  private getDefaultSuggestions(mentor: Mentor): WriterSuggestion[] {
+    const defaults: Record<string, WriterSuggestion[]> = {
       'tony-gilroy': [
-        'Identify what this scene must accomplish for the story, then cut everything else.',
-        'Give each character a specific, actable objective they pursue throughout the scene.',
-        'Find the real, specific disagreement hiding under polite surface conversation.',
-        'Start the scene later - cut the setup and jump into the conflict.'
+        { note: 'Scene purpose unclear', suggestion: 'Identify what this scene must accomplish for the story, then cut everything else.' },
+        { note: 'Character objectives vague', suggestion: 'Give each character a specific, actable objective they pursue throughout the scene.' },
+        { note: 'Conflict feels manufactured', suggestion: 'Find the real, specific disagreement hiding under polite surface conversation.' },
+        { note: 'Pacing drags', suggestion: 'Start the scene later - cut the setup and jump into the conflict.' }
       ],
       'sofia-coppola': [
-        'Trust silences and small gestures over explanatory dialogue.',
-        'Add atmospheric details that reflect and amplify character psychology.',
-        'Let characters reveal feelings through behavior and subtext, not words.',
-        'Find the authentic human moment hiding under the plot mechanics.'
+        { note: 'Emotions feel forced', suggestion: 'Trust silences and small gestures over explanatory dialogue.' },
+        { note: 'Setting feels generic', suggestion: 'Add atmospheric details that reflect and amplify character psychology.' },
+        { note: 'Dialogue too expository', suggestion: 'Let characters reveal feelings through behavior and subtext, not words.' },
+        { note: 'Lacks emotional truth', suggestion: 'Find the authentic human moment hiding under the plot mechanics.' }
       ],
       'vince-gilligan': [
-        'Ground every decision in established character psychology and flaws.',
-        'Create choices where no option is clearly right or wrong.',
-        'Show how character weaknesses create their own inevitable problems.',
-        'Dig deeper into why THIS character makes THIS choice now.'
+        { note: 'Character choices feel arbitrary', suggestion: 'Ground every decision in established character psychology and flaws.' },
+        { note: 'Moral stakes unclear', suggestion: 'Create choices where no option is clearly right or wrong.' },
+        { note: 'Consequences feel disconnected', suggestion: 'Show how character weaknesses create their own inevitable problems.' },
+        { note: 'Psychology too surface', suggestion: 'Dig deeper into why THIS character makes THIS choice now.' }
       ],
       'amy-pascal': [
-        'Find the universal emotional truth everyone can understand and connect with.',
-        'Make crystal clear what the character personally risks losing in this moment.',
-        'Show the human struggle underneath the specific plot situation.',
-        'Balance character flaws with genuinely sympathetic, relatable qualities.'
+        { note: 'Character hard to relate to', suggestion: 'Find the universal emotional truth everyone can understand and connect with.' },
+        { note: 'Stakes feel abstract', suggestion: 'Make crystal clear what the character personally risks losing in this moment.' },
+        { note: 'Audience investment low', suggestion: 'Show the human struggle underneath the specific plot situation.' },
+        { note: 'Emotional connection weak', suggestion: 'Balance character flaws with genuinely sympathetic, relatable qualities.' }
       ],
       'netflix-exec': [
-        'Start with the most compelling, surprising moment that raises immediate questions.',
-        'Add forward momentum that makes viewers need to know what happens next.',
-        'Deliver on the specific promises this genre makes to its audience.',
-        'Create moments of tension or surprise that make it impossible to look away.'
+        { note: 'Opening lacks hook', suggestion: 'Start with the most compelling, surprising moment that raises immediate questions.' },
+        { note: 'Scene drags', suggestion: 'Add forward momentum that makes viewers need to know what happens next.' },
+        { note: 'Genre expectations unclear', suggestion: 'Deliver on the specific promises this genre makes to its audience.' },
+        { note: 'Viewer engagement drops', suggestion: 'Create moments of tension or surprise that make it impossible to look away.' }
       ]
     };
 
