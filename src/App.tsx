@@ -469,11 +469,10 @@ const App: React.FC = () => {
       }
     } finally {
       // Clean up only if not cancelled (cancelled state is handled by handleCancelProcessing)
+      // NOTE: Don't clean up showProgressiveProgress here - let onComplete handle it
       if (!abortController.signal.aborted) {
-        setIsGeneratingFeedback(false);
-        setShowProgressiveProgress(false);
-        setProgressiveProgress(null);
         setCurrentAbortController(null);
+        // setIsGeneratingFeedback and setShowProgressiveProgress will be handled by onComplete
       }
     }
   };
@@ -756,9 +755,6 @@ if (session?.user) {
       }]
     } : null);
 
-    // Brief delay to show completion state
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
     // ✅ Check if operation was cancelled before setting results
     if (!abortController.signal.aborted) {
       setFeedback(result.feedback);
@@ -766,6 +762,9 @@ if (session?.user) {
       setRewrite(null);
       setDiffLines([]);
       refreshTokenDisplay();
+      
+      // Let the ProgressiveProcessingProgress component handle the completion display
+      // The modal will auto-dismiss after showing completion state
 
       console.log('✅ Token-aware progressive single scene feedback complete');
 
@@ -2167,12 +2166,18 @@ const handleShowWriterSuggestions = async () => {
 
   return (
     <div className="min-h-screen bg-slate-900 text-white">
-      {/* PRESERVED: UNIFIED PROGRESSIVE PROCESSING PROGRESS - Used for ALL feedback types */}
+      {/* ENHANCED: UNIFIED PROGRESSIVE PROCESSING PROGRESS with completion handling */}
       {showProgressiveProgress && progressiveProgress && (
         <ProgressiveProcessingProgress
           progress={progressiveProgress}
           mentor={selectedMentor}
           onCancel={handleCancelProcessing}
+          onComplete={() => {
+            console.log('🎉 Processing completed - dismissing modal');
+            setShowProgressiveProgress(false);
+            setProgressiveProgress(null);
+            setIsGeneratingFeedback(false);
+          }}
         />
       )}
       

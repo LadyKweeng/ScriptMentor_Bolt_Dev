@@ -1,5 +1,5 @@
 // src/components/ProgressiveProcessingProgress.tsx
-import React from 'react';
+import React, { useEffect } from 'react';
 import { ProcessingProgress } from '../services/progressiveFeedbackService';
 import { 
   FileText, 
@@ -26,13 +26,16 @@ interface ProgressiveProcessingProgressProps {
     accent: string;
   };
   onCancel?: () => void;
+  onComplete?: () => void; // NEW: Callback when processing completes
 }
 
 const ProgressiveProcessingProgress: React.FC<ProgressiveProcessingProgressProps> = ({
   progress,
   mentor,
-  onCancel
+  onCancel,
+  onComplete
 }) => {
+
   // FIXED: Add null checks and default values
   const completedChunks = progress.completedChunks || [];
   const isComplete = (progress.progress || 0) >= 100;
@@ -41,6 +44,18 @@ const ProgressiveProcessingProgress: React.FC<ProgressiveProcessingProgressProps
   const otherFailedChunks = completedChunks.filter(chunk => (chunk as any).processingError && (chunk as any).processingError !== 'rate limit').length;
   const hasFailures = rateLimitedChunks > 0 || otherFailedChunks > 0;
   const hasPartialResults = completedChunks.length > 0;
+
+  // NEW: Auto-dismiss after completion with delay
+  useEffect(() => {
+    if (isComplete && onComplete) {
+      const dismissTimer = setTimeout(() => {
+        console.log('✅ Auto-dismissing completed feedback modal');
+        onComplete();
+      }, 3000); // Auto-dismiss after 3 seconds
+
+      return () => clearTimeout(dismissTimer);
+    }
+  }, [isComplete, onComplete]);
 
   // Processing type specific configurations
   const getProcessingTypeConfig = () => {
@@ -382,17 +397,33 @@ const ProgressiveProcessingProgress: React.FC<ProgressiveProcessingProgressProps
           </p>
         </div>
 
-        {/* Cancel Button */}
-        {onCancel && !isComplete && (
-          <div className="mt-6 flex justify-center">
+        {/* Action Buttons */}
+        <div className="mt-6 flex justify-center">
+          {!isComplete && onCancel && (
             <button
               onClick={onCancel}
               className="px-4 py-2 text-sm text-slate-400 hover:text-white transition-colors"
             >
               Cancel Processing
             </button>
-          </div>
-        )}
+          )}
+          
+          {isComplete && onCancel && (
+            <button
+              onClick={onCancel}
+              className="px-6 py-3 text-white text-sm font-medium rounded-lg transition-all duration-200 hover:scale-105 active:scale-95"
+              style={{ 
+                backgroundColor: mentor.accent,
+                boxShadow: `0 4px 12px ${mentor.accent}40`
+              }}
+            >
+              <div className="flex items-center gap-2">
+                <CheckCircle className="h-4 w-4" />
+                View Results
+              </div>
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
