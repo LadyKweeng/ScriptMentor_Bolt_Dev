@@ -8,7 +8,9 @@ import {
   Eye,
   BarChart3,
   CheckCircle,
-  Sparkles
+  Sparkles,
+  Coins,
+  ArrowDown
 } from 'lucide-react';
 import ChunkedFeedbackView from './ChunkedFeedbackView';
 import { backendApiService } from '../services/backendApiService';
@@ -19,6 +21,7 @@ interface FeedbackViewProps {
   feedbackMode?: FeedbackMode;
   onModeChange?: (mode: FeedbackMode) => void;
   onApplyFeedback?: () => void;
+  onShowWriterSuggestions?: () => void;  // Add this new prop
 }
 
 const FeedbackView: React.FC<FeedbackViewProps> = ({ 
@@ -26,7 +29,8 @@ const FeedbackView: React.FC<FeedbackViewProps> = ({
   mentor, 
   feedbackMode = 'structured',
   onModeChange,
-  onApplyFeedback
+  onApplyFeedback,
+  onShowWriterSuggestions
 }) => {
   const [viewMode, setViewMode] = useState<'overview' | 'structured' | 'scratchpad'>('overview');
   const [copiedText, setCopiedText] = useState('');
@@ -375,6 +379,48 @@ Your overview should sound like it was written by you personally, not generated.
                   <p className="text-sm font-medium text-white">
                     {isBlended ? 'Blended' : 'Single Mentor'}
                   </p>
+                </div>
+              </div>
+
+              {/* Enhanced Writer Suggestions Section */}
+              <div className="mt-6 pt-4 border-t border-slate-600/30">
+                <div className="bg-slate-700/20 rounded-lg p-4 border border-slate-600/30">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <Sparkles className="h-5 w-5 text-yellow-400" />
+                      <div>
+                        <h4 className="font-medium text-white">Enhanced Writer Suggestions</h4>
+                        <p className="text-sm text-slate-400">
+                          Concrete before/after examples with {isBlended ? 'blended mentor' : 'mentor'} guidance
+                        </p>
+                      </div>
+                    </div>
+                    
+                    <div className="flex flex-col items-end gap-2">
+                      <button
+                        onClick={onShowWriterSuggestions}
+                        className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded-md text-sm font-medium transition-all"
+                        type="button"
+                      >
+                        <Sparkles className="h-4 w-4" />
+                        View Suggestions
+                      </button>
+                      
+                      <div className="flex items-center gap-1 text-xs text-slate-400">
+                        <Coins className="h-3 w-3" />
+                        <span>8 tokens</span>
+                        <span className="text-slate-400">•</span>
+                        <span className="text-slate-500">30-45 seconds</span>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="mt-3 flex items-center gap-2 text-xs text-green-400">
+                    <ArrowDown className="h-3 w-3" />
+                    <span>
+                      Click above to see your personalized rewrite suggestions{isBlended ? ' from blended mentors' : ''}!
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>

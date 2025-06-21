@@ -2098,7 +2098,7 @@ const handleShowWriterSuggestions = async () => {
                       Partial Results - Processing continues in background
                     </span>
                   </div>
-                  
+
                   {/* Check if this is chunked feedback by checking for chunks property */}
                   {partialFeedback.isChunked || (partialFeedback as any).chunks ? (
                     <ChunkedFeedbackView 
@@ -2106,6 +2106,7 @@ const handleShowWriterSuggestions = async () => {
                       mentor={selectedMentor}
                       feedbackMode={feedbackMode}
                       onModeChange={selectedMentorId !== 'blended' ? handleFeedbackModeChange : undefined}
+                      onShowWriterSuggestions={handleShowWriterSuggestions}
                     />
                   ) : (
                     <FeedbackView 
@@ -2113,31 +2114,31 @@ const handleShowWriterSuggestions = async () => {
                       mentor={selectedMentor}
                       feedbackMode={feedbackMode}
                       onModeChange={selectedMentorId !== 'blended' ? handleFeedbackModeChange : undefined}
+                      onShowWriterSuggestions={handleShowWriterSuggestions}
                     />
                   )}
                 </div>
               ) : feedback ? (
                 <>
-                  {/* Check if this is chunked feedback by checking for chunks property */}
-                  {feedback.isChunked || (feedback as any).chunks ? (
-                    <ChunkedFeedbackView 
-                      chunkedFeedback={feedback as any}
-                      mentor={selectedMentor}
-                      feedbackMode={feedbackMode}
-                      onModeChange={selectedMentorId !== 'blended' ? handleFeedbackModeChange : undefined}
-                    />
-                  ) : (
-                    <FeedbackView 
-                      feedback={feedback} 
-                      mentor={selectedMentor}
-                      feedbackMode={feedbackMode}
-                      onModeChange={selectedMentorId !== 'blended' ? handleFeedbackModeChange : undefined}
-                    />
-                  )}
-                  
-                  {/* Always show WriterSuggestionsButton for any feedback */}
-                  <WriterSuggestionsButton />
-                </>
+                    {/* Check if this is chunked feedback by checking for chunks property */}
+                    {feedback.isChunked || (feedback as any).chunks ? (
+                      <ChunkedFeedbackView
+                        chunkedFeedback={feedback as any}
+                        mentor={selectedMentor}
+                        feedbackMode={feedbackMode}
+                        onModeChange={selectedMentorId !== 'blended' ? handleFeedbackModeChange : undefined}
+                        onShowWriterSuggestions={handleShowWriterSuggestions}
+                      />
+                    ) : (
+                      <FeedbackView
+                        feedback={feedback}
+                        mentor={selectedMentor}
+                        feedbackMode={feedbackMode}
+                        onModeChange={selectedMentorId !== 'blended' ? handleFeedbackModeChange : undefined}
+                        onShowWriterSuggestions={handleShowWriterSuggestions}
+                      />
+                    )}
+                  </>
               ) : null}
             </div>
           )}
