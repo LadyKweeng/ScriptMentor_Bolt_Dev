@@ -23,7 +23,7 @@ import { writerAgentService } from '../services/writerAgentService';
 interface RewriteSuggestionsProps {
   feedback: Feedback;
   originalScene: ScriptScene | ScriptChunk;
-  mentor: Mentor; // FIXED: Make mentor required and always validate
+  mentor?: Mentor; // FIXED: Make mentor optional to handle undefined cases
   selectedChunkId?: string | null;
   onClose: () => void;
   userId?: string; // NEW: Add userId for token integration
@@ -63,12 +63,11 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [selectedType, setSelectedType] = useState<string>('all');
 
-  // FIXED: Validate mentor prop exists at component mount
+  // ENHANCED: Validate mentor prop with graceful fallback
   useEffect(() => {
     if (!mentor) {
-      console.error('❌ RewriteSuggestions: No mentor provided');
-      setError('Mentor configuration is missing. Please select a mentor and try again.');
-      setIsLoading(false);
+      console.warn('⚠️ RewriteSuggestions: No mentor provided, will create fallback');
+      // Don't set error immediately - let the component try to work with feedback data
       return;
     }
 
@@ -370,10 +369,23 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
 
   const suggestionTypes = [...new Set(suggestions.map(s => s.type))];
 
-  // FIXED: Always check mentor exists before accessing properties
-  const mentorAccent = mentor?.accent || '#8b5cf6';
-  const mentorName = mentor?.name || 'Unknown Mentor';
-  const mentorAvatar = mentor?.avatar || '';
+  // ENHANCED: Create fallback mentor if needed with better defaults
+  const effectiveMentor = mentor || {
+    id: feedback.mentorId || 'fallback',
+    name: feedback.mentorId === 'blended' ? 'Blended Mentors' : 'Script Mentor',
+    accent: '#8b5cf6',
+    avatar: '',
+    tone: 'analytical',
+    styleNotes: 'AI generated feedback',
+    mantra: 'Focus on the craft.',
+    feedbackStyle: 'analytical' as const,
+    priorities: ['clarity'],
+    analysisApproach: 'systematic'
+  };
+
+  const mentorAccent = effectiveMentor.accent;
+  const mentorName = effectiveMentor.name;
+  const mentorAvatar = effectiveMentor.avatar;
 
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">

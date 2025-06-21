@@ -318,23 +318,38 @@ const App: React.FC = () => {
     return `Pages ${startPage}-${endPage}`;
   };
 
-  // PRESERVED: Complete script selection handler
+  // ENHANCED: Complete script selection handler with comprehensive state reset
   const handleScriptSelected = async (scriptId: string) => {
     try {
       setIsLoadingScript(true);
-      
+
       // Close library immediately when script is selected
       console.log('📖 Script selected, closing library');
       setShowLibrary(false);
-      // FIXED: Clear previous state before loading new script
-      console.log('🔄 Clearing previous script state for library selection');
+
+      // ENHANCED: Comprehensive state reset before loading new script
+      console.log('🔄 Clearing ALL previous script state for library selection');
       setFeedback(null);
+      setPartialFeedback(null); // Clear partial feedback too
       setRewrite(null);
       setDiffLines([]);
       setRewriteEvaluation(null);
       setWriterSuggestionsReady(false);
       setShowWriterSuggestions(false);
       setWriterSuggestionsStarted(false);
+      setWriterSuggestions(null); // Clear writer suggestions
+      setRewriteAnalysis(null); // Clear rewrite analysis
+      setTokenError(null); // Clear any token errors
+
+      // Cancel any ongoing processing
+      if (currentAbortController) {
+        console.log('🛑 Cancelling ongoing processing for script switch');
+        currentAbortController.abort();
+        setCurrentAbortController(null);
+      }
+      setIsGeneratingFeedback(false);
+      setShowProgressiveProgress(false);
+      setProgressiveProgress(null);
       
       console.log('📖 Loading script from Supabase:', scriptId);
       const script = await supabaseScriptService.getScript(scriptId);
@@ -1541,15 +1556,31 @@ const handleShowWriterSuggestions = async () => {
   const handleScriptUploaded = async (content: string, title: string, parsedCharacters: Record<string, any>) => {
     try {
       setIsLoadingScript(true);
-      console.log('🔄 Clearing previous script state for new upload');
+      console.log('🔄 Clearing ALL previous script state for new upload');
+
+      // ENHANCED: Comprehensive state reset for new upload
       setFeedback(null);
+      setPartialFeedback(null);
       setRewrite(null);
       setDiffLines([]);
       setRewriteEvaluation(null);
       setWriterSuggestionsReady(false);
       setShowWriterSuggestions(false);
       setWriterSuggestionsStarted(false);
+      setWriterSuggestions(null);
+      setRewriteAnalysis(null);
       setSelectedChunkId(null);
+      setTokenError(null);
+
+      // Cancel any ongoing processing
+      if (currentAbortController) {
+        console.log('🛑 Cancelling ongoing processing for new upload');
+        currentAbortController.abort();
+        setCurrentAbortController(null);
+      }
+      setIsGeneratingFeedback(false);
+      setShowProgressiveProgress(false);
+      setProgressiveProgress(null);
       
       // Determine if this should be chunked
       const chunkingOptions = ScriptChunker.recommendChunkingStrategy(content);
@@ -1711,14 +1742,26 @@ const handleShowWriterSuggestions = async () => {
     }
   };
 
-  // PRESERVED: Updated handleChunkSelection to regenerate writer suggestions for the new chunk
+  // ENHANCED: Complete chunk selection with proper state reset
   const handleChunkSelection = (chunkId: string) => {
+    console.log('📍 Switching to chunk:', chunkId);
     setSelectedChunkId(chunkId);
-    
-    // Reset writer suggestions when switching chunks
+
+    // ENHANCED: Reset ALL chunk-related state when switching
     setWriterSuggestionsReady(false);
     setShowWriterSuggestions(false);
     setWriterSuggestionsStarted(false);
+    setWriterSuggestions(null); // Clear any existing writer suggestions
+    setRewrite(null); // Clear any chunk-specific rewrites
+    setDiffLines([]); // Clear diff lines
+    setRewriteEvaluation(null); // Clear evaluation
+    setTokenError(null); // Clear any token errors
+
+    // Cancel any ongoing writer suggestions generation for previous chunk
+    if (isGeneratingWriterSuggestions) {
+      console.log('🛑 Cancelling ongoing writer suggestions for chunk switch');
+      setIsGeneratingWriterSuggestions(false);
+    }
     
     // If we have chunked feedback and the new chunk has feedback, start generating writer suggestions
     if (feedback && (feedback.isChunked || (feedback as any).chunks) && currentScript) {
@@ -2101,16 +2144,20 @@ const handleShowWriterSuggestions = async () => {
           )}
         </div>
         
-        {/* FIXED: Pass all required props to RewriteSuggestions including mentor validation */}
-        {showWriterSuggestions && (feedback || partialFeedback) && displayScene && selectedMentor && (
+        {/* ENHANCED: Pass all required props to RewriteSuggestions with optional mentor */}
+        {showWriterSuggestions && (feedback || partialFeedback) && displayScene && (
           <div className="mt-6">
             <RewriteSuggestions
               originalScene={displayScene}
               feedback={feedback || partialFeedback!}
-              mentor={selectedMentor} // FIXED: Ensure mentor is always provided
+              mentor={selectedMentor} // ENHANCED: Now optional, component handles undefined case
               selectedChunkId={selectedChunkId}
               userId={session?.user?.id} // NEW: Pass userId for token integration
-              onClose={() => setShowWriterSuggestions(false)}
+              onClose={() => {
+                console.log('🔄 Closing writer suggestions and resetting state');
+                setShowWriterSuggestions(false);
+                setWriterSuggestions(null); // Clear suggestions when closing
+              }}
             />
           </div>
         )}
