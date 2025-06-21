@@ -274,39 +274,55 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
   };
 
   // NEW: Convert simple suggestions to complex format for UI compatibility
-  const convertSimpleToComplexSuggestions = (simpleSuggestions: SimpleWriterSuggestion[], feedbackText: string): WriterSuggestion[] => {
-    return simpleSuggestions.map((simple, index) => {
-      // Determine type based on content
-      let type: WriterSuggestion['type'] = 'structure';
-      if (simple.note.toLowerCase().includes('dialogue') || simple.suggestion.toLowerCase().includes('dialogue')) {
-        type = 'dialogue';
-      } else if (simple.note.toLowerCase().includes('action') || simple.suggestion.toLowerCase().includes('action')) {
-        type = 'action';
-      } else if (simple.note.toLowerCase().includes('character') || simple.suggestion.toLowerCase().includes('character')) {
-        type = 'character';
-      } else if (simple.note.toLowerCase().includes('pacing') || simple.suggestion.toLowerCase().includes('pacing')) {
-        type = 'pacing';
-      }
+const convertSimpleToComplexSuggestions = (simpleSuggestions: SimpleWriterSuggestion[], feedbackText: string): WriterSuggestion[] => {
+  return simpleSuggestions.map((simple, index) => {
+    // Determine type based on content
+    let type: WriterSuggestion['type'] = 'structure';
+    if (simple.note.toLowerCase().includes('dialogue') || simple.suggestion.toLowerCase().includes('dialogue')) {
+      type = 'dialogue';
+    } else if (simple.note.toLowerCase().includes('action') || simple.suggestion.toLowerCase().includes('action')) {
+      type = 'action';
+    } else if (simple.note.toLowerCase().includes('character') || simple.suggestion.toLowerCase().includes('character')) {
+      type = 'character';
+    } else if (simple.note.toLowerCase().includes('pacing') || simple.suggestion.toLowerCase().includes('pacing')) {
+      type = 'pacing';
+    }
 
-      // Determine priority based on language
-      let priority: WriterSuggestion['priority'] = 'medium';
-      if (simple.suggestion.toLowerCase().includes('critical') || simple.suggestion.toLowerCase().includes('important')) {
-        priority = 'high';
-      } else if (simple.suggestion.toLowerCase().includes('minor') || simple.suggestion.toLowerCase().includes('consider')) {
-        priority = 'low';
-      }
+    // Determine priority based on language
+    let priority: WriterSuggestion['priority'] = 'medium';
+    if (simple.suggestion.toLowerCase().includes('critical') || simple.suggestion.toLowerCase().includes('important')) {
+      priority = 'high';
+    } else if (simple.suggestion.toLowerCase().includes('minor') || simple.suggestion.toLowerCase().includes('consider')) {
+      priority = 'low';
+    }
 
-      return {
-        id: `suggestion-${index + 1}`,
-        type: type,
-        title: simple.note || `Writer Suggestion ${index + 1}`,
-        description: simple.suggestion,
-        reasoning: `${mentor.name} recommends: ${simple.suggestion}`,
-        priority: priority,
-        lineReference: `Based on feedback analysis`
-      };
-    });
+    // Generate clean, focused reasoning without repetitive boilerplate
+    const reasoning = generateCleanReasoning(simple, type);
+
+    return {
+      id: `suggestion-${index + 1}`,
+      type: type,
+      title: simple.note || `Writer Suggestion ${index + 1}`,
+      description: simple.suggestion,
+      reasoning: reasoning,
+      priority: priority,
+      lineReference: `Based on feedback analysis`
+    };
+  });
+};
+
+// NEW: Generate clean reasoning without boilerplate text
+const generateCleanReasoning = (suggestion: SimpleWriterSuggestion, type: WriterSuggestion['type']): string => {
+  const reasoningTemplates = {
+    dialogue: 'This improves conversation flow and makes characters sound more natural while advancing the story.',
+    action: 'This creates clearer visual storytelling that engages viewers and supports character development.',
+    character: 'This strengthens character motivation and makes their choices more psychologically compelling.',
+    pacing: 'This optimizes story rhythm to maintain audience engagement throughout the scene.',
+    structure: 'This tightens the scene foundation and ensures every element serves the dramatic purpose.'
   };
+
+  return reasoningTemplates[type] || reasoningTemplates.structure;
+};
 
   const getFeedbackText = (feedbackObj: Feedback): string => {
     // Try multiple sources for feedback content
