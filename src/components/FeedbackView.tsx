@@ -21,7 +21,8 @@ interface FeedbackViewProps {
   feedbackMode?: FeedbackMode;
   onModeChange?: (mode: FeedbackMode) => void;
   onApplyFeedback?: () => void;
-  onShowWriterSuggestions?: () => void;  // Add this new prop
+  onShowWriterSuggestions?: () => void;
+  selectedChunkId?: string | null; // NEW: Add for consistency
 }
 
 const FeedbackView: React.FC<FeedbackViewProps> = ({ 

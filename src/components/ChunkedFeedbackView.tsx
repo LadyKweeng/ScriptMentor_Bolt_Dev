@@ -39,16 +39,39 @@ interface ChunkedFeedbackViewProps {
   feedbackMode?: FeedbackMode;
   onModeChange?: (mode: FeedbackMode) => void;
   onShowWriterSuggestions?: () => void;  // Add this new prop
+  selectedChunkId?: string | null; // NEW: Add selected chunk ID
 }
 
 type ViewMode = 'overview' | 'structured' | 'scratchpad';
+
+// NEW: Get display title for selected chunk
+const getSelectedChunkTitle = (chunks: any[], selectedChunkId: string | null): string => {
+  if (!selectedChunkId || !chunks) return '';
+  
+  const chunkIndex = chunks.findIndex(c => c.chunkId === selectedChunkId);
+  if (chunkIndex === -1) return '';
+  
+  const chunk = chunks[chunkIndex];
+  
+  // Use actual page numbers if available
+  if (chunk.startPage && chunk.endPage) {
+    return `Pages ${chunk.startPage}-${chunk.endPage} (Section ${chunkIndex + 1})`;
+  }
+  
+  // Fallback: estimate pages based on position
+  const avgPagesPerChunk = 15;
+  const startPage = (chunkIndex * avgPagesPerChunk) + 1;
+  const endPage = startPage + avgPagesPerChunk - 1;
+  return `Pages ${startPage}-${endPage} (Section ${chunkIndex + 1})`;
+};
 
 const ChunkedFeedbackView: React.FC<ChunkedFeedbackViewProps> = ({
   chunkedFeedback,
   mentor,
   feedbackMode = 'structured',
   onModeChange,
-  onShowWriterSuggestions
+  onShowWriterSuggestions,
+  selectedChunkId // NEW: Add this parameter
 }) => {
   const [viewMode, setViewMode] = useState<ViewMode>('overview');
   const [expandedChunks, setExpandedChunks] = useState<Set<string>>(new Set());
@@ -498,7 +521,7 @@ Your overview should sound like it was written by you personally, not generated.
               {/* Enhanced Writer Suggestions Section */}
               <div className="mt-6 pt-4 border-t border-slate-600/30">
                 <div className="bg-slate-700/20 rounded-lg p-4 border border-slate-600/30">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-3">
                       <Sparkles className="h-5 w-5 text-yellow-400" />
                       <div>
@@ -508,27 +531,39 @@ Your overview should sound like it was written by you personally, not generated.
                         </p>
                       </div>
                     </div>
-                    
-                    <div className="flex flex-col items-end gap-2">
-                      <button
-                        onClick={onShowWriterSuggestions}
-                        className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded-md text-sm font-medium transition-all"
-                        type="button"
-                      >
-                        <Sparkles className="h-4 w-4" />
-                        View Suggestions
-                      </button>
-                      
-                      <div className="flex items-center gap-1 text-xs text-slate-400">
-                        <Coins className="h-3 w-3" />
-                        <span>8 tokens</span>
-                        <span className="text-slate-400">•</span>
-                        <span className="text-slate-500">30-45 seconds</span>
+
+                    <div className="flex items-center gap-3">
+                      {/* Page/Section Info Badge */}
+                      {selectedChunkId && (
+                        <div className="flex items-center gap-2 text-sm bg-blue-600/20 text-blue-400 px-3 py-2 rounded-lg border border-blue-500/30">
+                          <FileText className="h-4 w-4" />
+                          <span className="font-medium">
+                            {getSelectedChunkTitle(chunkedFeedback.chunks || [], selectedChunkId)}
+                          </span>
+                        </div>
+                      )}
+
+                      <div className="flex flex-col items-end gap-2">
+                        <button
+                          onClick={onShowWriterSuggestions}
+                          className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded-md text-sm font-medium transition-all"
+                          type="button"
+                        >
+                          <Sparkles className="h-4 w-4" />
+                          View Suggestions
+                        </button>
+
+                        <div className="flex items-center gap-1 text-xs text-slate-400">
+                          <Coins className="h-3 w-3" />
+                          <span>8 tokens</span>
+                          <span className="text-slate-400">•</span>
+                          <span className="text-slate-500">30-45 seconds</span>
+                        </div>
                       </div>
                     </div>
                   </div>
-                  
-                  <div className="mt-3 flex items-center gap-2 text-xs text-green-400">
+
+                  <div className="flex items-center gap-2 text-xs text-green-400">
                     <ArrowDown className="h-3 w-3" />
                     <span>
                       Click above to see your personalized rewrite suggestions{isBlended ? ' from blended mentors' : ''}!

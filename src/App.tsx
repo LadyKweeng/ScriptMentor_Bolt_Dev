@@ -2107,6 +2107,7 @@ const handleShowWriterSuggestions = async () => {
                       feedbackMode={feedbackMode}
                       onModeChange={selectedMentorId !== 'blended' ? handleFeedbackModeChange : undefined}
                       onShowWriterSuggestions={handleShowWriterSuggestions}
+                      selectedChunkId={selectedChunkId} // NEW: Pass selected chunk ID
                     />
                   ) : (
                     <FeedbackView 
@@ -2128,6 +2129,7 @@ const handleShowWriterSuggestions = async () => {
                         feedbackMode={feedbackMode}
                         onModeChange={selectedMentorId !== 'blended' ? handleFeedbackModeChange : undefined}
                         onShowWriterSuggestions={handleShowWriterSuggestions}
+                        selectedChunkId={selectedChunkId} // NEW: Pass selected chunk ID
                       />
                     ) : (
                       <FeedbackView

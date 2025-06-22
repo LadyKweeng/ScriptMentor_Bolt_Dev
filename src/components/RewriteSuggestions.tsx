@@ -338,6 +338,31 @@ const generateCleanReasoning = (suggestion: SimpleWriterSuggestion, type: Writer
     return '';
   };
 
+  // NEW: Helper function to get chunk display information
+  const getChunkDisplayInfo = (): string => {
+    if (!selectedChunkId || sceneType !== 'chunk') {
+      return 'Script Section';
+    }
+
+    // Extract chunk information from originalScene title or use chunk ID
+    if (originalScene.title && originalScene.title.includes('Pages')) {
+      return originalScene.title;
+    }
+
+    // Fallback: try to extract from feedback context
+    if (isChunked && feedback.chunkedFeedback?.chunks) {
+      const chunkFeedback = feedback.chunkedFeedback.chunks.find(
+        chunk => chunk.chunkId === selectedChunkId
+      );
+      if (chunkFeedback?.chunkTitle) {
+        return chunkFeedback.chunkTitle;
+      }
+    }
+
+    // Final fallback
+    return `Script Section (${selectedChunkId.slice(-4)})`;
+  };
+
   const copyToClipboard = async (text: string, index?: number) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -436,7 +461,12 @@ const generateCleanReasoning = (suggestion: SimpleWriterSuggestion, type: Writer
               <div className="flex items-center gap-3 text-sm text-slate-400">
                 <div className="flex items-center gap-1">
                   <FileText className="h-3 w-3" />
-                  <span>{sceneType === 'chunk' ? 'Script Section' : 'Single Scene'}</span>
+                  <span>
+                    {sceneType === 'chunk' && selectedChunkId
+                      ? getChunkDisplayInfo()
+                      : 'Single Scene'
+                    }
+                  </span>
                 </div>
                 <div className="flex items-center gap-1">
                   <Users className="h-3 w-3" />
