@@ -35,15 +35,16 @@ export class FeedbackLibraryService {
   }
 
   /**
-   * Save feedback to library with encryption
+   * Save complete feedback session to library with encryption
    */
-  async saveFeedbackToLibrary(
+  async saveFeedbackSessionToLibrary(
     scriptId: string,
     scriptTitle: string,
     mentorIds: string[],
     mentorNames: string,
     pages: string,
-    feedback: Feedback
+    feedback: Feedback,
+    scriptContent?: string
   ): Promise<string> {
     try {
       const userId = await this.getAuthenticatedUserId();
@@ -55,9 +56,20 @@ export class FeedbackLibraryService {
         feedbackId: feedback.id
       });
 
-      // Encrypt the feedback content
+      // Create complete feedback session object
+      const feedbackSession = {
+        feedback: feedback,
+        scriptContent: scriptContent,
+        sessionType: 'complete_feedback',
+        timestamp: new Date().toISOString(),
+        version: '1.0',
+        // NEW: Include overview content if available
+        overviewContent: (feedback as any).overviewContent || null
+      };
+
+      // Encrypt the complete session
       const encryptedContent = await EncryptionService.encryptContent(
-        JSON.stringify(feedback), 
+        JSON.stringify(feedbackSession), 
         userId
       );
 
@@ -143,10 +155,10 @@ export class FeedbackLibraryService {
         throw error;
       }
 
-      console.log('✅ Writer suggestions saved to library:', data.id);
+      console.log('✅ Feedback saved to library:', data.id);
       return data.id;
     } catch (error) {
-      console.error('❌ Failed to save writer suggestions to library:', error);
+      console.error('❌ Failed to save feedback to library:', error);
       throw error;
     }
   }

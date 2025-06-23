@@ -52,7 +52,12 @@ const FeedbackView: React.FC<FeedbackViewProps> = ({
   useEffect(() => {
     // Generate overview when feedback changes or when switching to overview mode
     if (viewMode === 'overview' && !overviewContent) {
-      generateOverview();
+      // NEW: Check if overview already exists in the feedback object
+      if ((feedback as any).overviewContent) {
+        setOverviewContent((feedback as any).overviewContent);
+      } else {
+        generateOverview();
+      }
     }
   }, [feedback.id, viewMode]);
 
@@ -122,9 +127,18 @@ Your overview should sound like it was written by you personally, not generated.
         
         if (overview) {
           setOverviewContent(overview);
+          // NEW: Store overview in the feedback object for persistence
+          if (feedback && overview) {
+            (feedback as any).overviewContent = overview;
+          }
         } else {
           // Fallback if API fails
-          setOverviewContent(generateFallbackOverview(feedback, mentor));
+          const fallbackOverview = generateFallbackOverview(feedback, mentor);
+          setOverviewContent(fallbackOverview);
+          // NEW: Store fallback overview in the feedback object for persistence
+          if (feedback && fallbackOverview) {
+            (feedback as any).overviewContent = fallbackOverview;
+          }
         }
       } catch (error) {
         console.error('Failed to generate AI overview:', error);

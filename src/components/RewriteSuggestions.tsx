@@ -19,6 +19,7 @@ import {
   Clock
 } from 'lucide-react';
 import { writerAgentService } from '../services/writerAgentService';
+import { feedbackLibraryService } from '../services/feedbackLibraryService';
 
 interface RewriteSuggestionsProps {
   feedback: Feedback;
@@ -27,6 +28,10 @@ interface RewriteSuggestionsProps {
   selectedChunkId?: string | null;
   onClose: () => void;
   userId?: string; // NEW: Add userId for token integration
+  // NEW: Add script context for auto-saving
+  scriptId?: string;
+  scriptTitle?: string;
+  currentPages?: string;
 }
 
 // PRESERVED: Complex WriterSuggestion interface from current version
@@ -84,6 +89,46 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
   const isBlended = feedback.mentorId === 'blended';
   const isChunked = feedback.isChunked && (feedback.chunkedFeedback || (feedback as any).chunks);
   const sceneType = 'chunkType' in originalScene ? 'chunk' : 'scene';
+
+  // NEW: Auto-save writer suggestions to library
+  const autoSaveWriterSuggestions = async (suggestions: WriterSuggestion[]) => {
+    try {
+      if (!scriptId || !scriptTitle || !mentor || !userId) {
+        console.log('📝 Skipping auto-save: missing script context, mentor, or userId');
+        return;
+      }
+
+      const mentorIds = mentor.id === 'blended' ? ['blended'] : [mentor.id];
+      const mentorNames = mentor.name;
+      const pages = currentPages || 'Unknown Pages';
+
+      // Create writer suggestions response format
+      const writerSuggestionsResponse = {
+        suggestions: suggestions.map(s => ({
+          note: s.title,
+          suggestion: s.description
+        })),
+        success: true,
+        mentor_id: mentor.id,
+        timestamp: new Date().toISOString()
+      };
+
+      await feedbackLibraryService.saveWriterSuggestionsToLibrary(
+        scriptId,
+        scriptTitle,
+        mentorIds,
+        mentorNames,
+        pages,
+        writerSuggestionsResponse,
+        feedback
+      );
+
+      console.log('✅ Writer suggestions auto-saved to library');
+    } catch (error) {
+      console.warn('⚠️ Failed to auto-save writer suggestions:', error);
+      // Don't block the user experience for save failures
+    }
+  };
 
   // PRESERVED: Extract chunk feedback for chunked scripts
   useEffect(() => {
@@ -224,6 +269,9 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
       // FIXED: Handle both simple and complex suggestion formats
       const processedSuggestions = await processApiResponse(response, feedbackText);
       setSuggestions(processedSuggestions);
+
+      // AUTO-SAVE: Save writer suggestions to library
+      autoSaveWriterSuggestions(processedSuggestions);
       
       console.log('✅ Enhanced Writer suggestions loaded:', {
         suggestionsCount: processedSuggestions.length,

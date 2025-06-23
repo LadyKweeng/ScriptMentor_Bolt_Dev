@@ -52,10 +52,17 @@ import { feedbackLibraryService } from './services/feedbackLibraryService'; // N
 const LibraryButton: React.FC<{
   showLibrary: boolean;
   onToggle: () => void;
-}> = React.memo(({ showLibrary, onToggle }) => (
+  disabled?: boolean;
+}> = React.memo(({ showLibrary, onToggle, disabled = false }) => (
   <button
     onClick={onToggle}
-    className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-md transition-all duration-200 ease-in-out transform hover:scale-105 active:scale-95"
+    disabled={disabled}
+    className={`flex items-center gap-2 px-4 py-2 rounded-md transition-all duration-200 ease-in-out transform text-white ${disabled
+        ? 'bg-slate-600 cursor-not-allowed opacity-75'
+        : showLibrary
+          ? 'bg-blue-600 hover:bg-blue-500 hover:scale-105 active:scale-95'
+          : 'bg-slate-700 hover:bg-slate-600 hover:scale-105 active:scale-95'
+      }`}
     type="button"
   >
     {showLibrary ? <BookMarked className="h-5 w-5" /> : <BookOpen className="h-5 w-5" />}
@@ -213,19 +220,43 @@ const App: React.FC = () => {
     setRewriteAnalysis(null);
   };
 
-  // PRESERVED: Fixed toggle function without showLibrary dependency to prevent recreation
+// ENHANCED: Fixed toggle function with proper library coordination
   const handleToggleLibrary = useCallback(() => {
-    console.log('📚 Toggling library');
+    console.log('📚 Toggling script library');
     setShowLibrary(prev => {
       const newState = !prev;
-      console.log('📚 New library state:', newState);
+      console.log('📚 New script library state:', newState);
+
+      // NEW: Close feedback library when opening script library
+      if (newState && showFeedbackLibrary) {
+        console.log('📚 Closing feedback library to open script library');
+        setShowFeedbackLibrary(false);
+      }
+
       return newState;
     });
-  }, []); // Remove showLibrary dependency
+  }, [showFeedbackLibrary]); // Add showFeedbackLibrary dependency
+
+  // NEW: Handle feedback library toggle with proper coordination
+  const handleToggleFeedbackLibrary = useCallback(() => {
+    console.log('📚 Toggling feedback library');
+    setShowFeedbackLibrary(prev => {
+      const newState = !prev;
+      console.log('📚 New feedback library state:', newState);
+
+      // NEW: Close script library when opening feedback library
+      if (newState && showLibrary) {
+        console.log('📚 Closing script library to open feedback library');
+        setShowLibrary(false);
+      }
+
+      return newState;
+    });
+  }, [showLibrary]); // Add showLibrary dependency
 
   // PRESERVED: ENHANCED CANCEL FUNCTION - Properly stops backend processing
   const handleCancelProcessing = async () => {
-  console.log('🛑 User initiated cancel - stopping all processing...');
+    console.log('🛑 User initiated cancel - stopping all processing...');
 
   try {
     // 1. Cancel the progressive feedback service
@@ -345,9 +376,10 @@ const App: React.FC = () => {
     try {
       setIsLoadingScript(true);
 
-      // Close library immediately when script is selected
-      console.log('📖 Script selected, closing library');
+      // NEW: Close both libraries immediately when script is selected
+      console.log('📖 Script selected, closing all libraries');
       setShowLibrary(false);
+      setShowFeedbackLibrary(false);
 
       // ENHANCED: Comprehensive state reset before loading new script
       console.log('🔄 Clearing ALL previous script state for library selection');
@@ -580,6 +612,23 @@ const App: React.FC = () => {
 
             console.log('✅ Token-aware progressive chunked feedback complete');
 
+            // AUTO-SAVE: Save complete feedback session to library
+            try {
+              await feedbackLibraryService.saveFeedbackSessionToLibrary(
+                script.id,
+                script.title,
+                [mentor.id],
+                mentor.name,
+                `Pages 1-${script.totalPages || script.chunks.length * 15}`,
+                finalFeedback,
+                script.originalContent
+              );
+              console.log('✅ Feedback session auto-saved to library');
+            } catch (error) {
+              console.warn('⚠️ Failed to auto-save feedback session:', error);
+              // Don't block the user experience for save failures
+            }
+
             // Start writer suggestions in background (with cancellation support)
             if (selectedChunkId) {
               const selectedChunk = script.chunks.find(c => c.id === selectedChunkId);
@@ -785,10 +834,24 @@ if (session?.user) {
       setDiffLines([]);
       refreshTokenDisplay();
       
-      // Let the ProgressiveProcessingProgress component handle the completion display
-      // The modal will auto-dismiss after showing completion state
-
       console.log('✅ Token-aware progressive single scene feedback complete');
+
+      // AUTO-SAVE: Save complete feedback session to library
+      try {
+        await feedbackLibraryService.saveFeedbackSessionToLibrary(
+          scene.id,
+          scene.title,
+          [mentor.id],
+          mentor.name,
+          'Single Scene',
+          result.feedback,
+          scene.content
+        );
+        console.log('✅ Single scene feedback auto-saved to library');
+      } catch (error) {
+        console.warn('⚠️ Failed to auto-save single scene feedback:', error);
+        // Don't block the user experience for save failures
+      }
 
       // Start writer suggestions in background
       setIsGeneratingWriterSuggestions(true);
@@ -1961,19 +2024,44 @@ const handleShowWriterSuggestions = async () => {
   // NEW: Handle feedback library selection
   const handleFeedbackLibrarySelection = async (item: any) => {
     try {
-      console.log('📚 Loading feedback from library:', item.id);
+      console.log('📚 Loading complete feedback session from library:', item.id);
       const decryptedItem = await feedbackLibraryService.getFeedbackLibraryItem(item.id);
       
-      // Load the feedback into the feedback viewer
-      setFeedback(decryptedItem.content);
-      setSelectedMentorId(decryptedItem.content.mentorId || 'blended');
+      // Check if this is a complete session or legacy feedback
+      if (decryptedItem.content.sessionType === 'complete_feedback') {
+        // Load complete feedback session
+        const session = decryptedItem.content;
+        const restoredFeedback = session.feedback;
+        
+        // NEW: Restore overview content if available
+        if (session.overviewContent) {
+          (restoredFeedback as any).overviewContent = session.overviewContent;
+        }
+        
+        setFeedback(restoredFeedback);
+        setSelectedMentorId(restoredFeedback.mentorId || 'blended');
+        
+        // Restore script context if available
+        if (session.scriptContent && !currentScript && !currentScene) {
+          console.log('📄 Restoring script context from session');
+          // Could restore script context here if needed
+        }
+      } else {
+        // Handle legacy feedback format
+        setFeedback(decryptedItem.content);
+        setSelectedMentorId(decryptedItem.content.mentorId || 'blended');
+      }
       
-      // Close the feedback library
+      // NEW: Close both libraries and ensure we're in main view
       setShowFeedbackLibrary(false);
+      setShowLibrary(false);
       
-      console.log('✅ Feedback loaded from library successfully');
+      console.log('✅ Complete feedback session loaded from library successfully');
+      
+      // NEW: Ensure we navigate to the main feedback view
+      // The feedback will be automatically displayed in the main workspace
     } catch (error) {
-      console.error('❌ Failed to load feedback from library:', error);
+      console.error('❌ Failed to load feedback session from library:', error);
       setTokenError(`Failed to load feedback: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
@@ -1981,19 +2069,38 @@ const handleShowWriterSuggestions = async () => {
   // NEW: Handle writer suggestions library selection
   const handleWriterSuggestionsLibrarySelection = async (item: any) => {
     try {
-      console.log('📚 Loading writer suggestions from library:', item.id);
+      console.log('📚 Loading writer suggestions session from library:', item.id);
       const decryptedItem = await feedbackLibraryService.getFeedbackLibraryItem(item.id);
       
-      // Load writer suggestions viewer with the saved content
-      setWriterSuggestions(decryptedItem.content);
-      setShowWriterSuggestions(true);
+      // Check if this is a complete suggestions session
+      if (decryptedItem.content.sessionType === 'writer_suggestions') {
+        const session = decryptedItem.content;
+        
+        // Restore the original feedback context if available
+        if (session.originalFeedback) {
+          setFeedback(session.originalFeedback);
+          setSelectedMentorId(session.originalFeedback.mentorId || 'blended');
+        }
+        
+        // Load writer suggestions
+        setWriterSuggestions(session.writerSuggestions);
+        setShowWriterSuggestions(true);
+      } else {
+        // Handle legacy format
+        setWriterSuggestions(decryptedItem.content);
+        setShowWriterSuggestions(true);
+      }
       
-      // Close the feedback library
+      // NEW: Close both libraries and ensure we're in main view
       setShowFeedbackLibrary(false);
+      setShowLibrary(false);
       
-      console.log('✅ Writer suggestions loaded from library successfully');
+      console.log('✅ Writer suggestions session loaded from library successfully');
+      
+      // NEW: Ensure we navigate to the main feedback view with suggestions open
+      // The suggestions will be automatically displayed in the main workspace
     } catch (error) {
-      console.error('❌ Failed to load writer suggestions from library:', error);
+      console.error('❌ Failed to load writer suggestions session from library:', error);
       setTokenError(`Failed to load writer suggestions: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
@@ -2223,6 +2330,10 @@ const handleShowWriterSuggestions = async () => {
               mentor={selectedMentor} // ENHANCED: Now optional, component handles undefined case
               selectedChunkId={selectedChunkId}
               userId={session?.user?.id} // NEW: Pass userId for token integration
+              // NEW: Pass script context for auto-saving
+              scriptId={currentScript?.id}
+              scriptTitle={currentScript?.title}
+              currentPages={getCurrentPageRange()}
               onClose={() => {
                 console.log('🔄 Closing writer suggestions and resetting state');
                 setShowWriterSuggestions(false);
@@ -2303,15 +2414,22 @@ const handleShowWriterSuggestions = async () => {
             
             <LibraryButton 
               showLibrary={showLibrary} 
-              onToggle={handleToggleLibrary} 
+              onToggle={handleToggleLibrary}
+              disabled={showFeedbackLibrary} // NEW: Visual indication when other library is open
             />
-            {/* NEW: Feedback Library Button */}
+            {/* ENHANCED: Feedback Library Button with proper toggle handler */}
             <button
-              onClick={() => setShowFeedbackLibrary(!showFeedbackLibrary)}
-              className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-md transition-all duration-200 ease-in-out transform hover:scale-105 active:scale-95"
+              onClick={handleToggleFeedbackLibrary}
+              disabled={showLibrary}
+              className={`flex items-center gap-2 px-4 py-2 rounded-md transition-all duration-200 ease-in-out transform text-white ${showLibrary
+                  ? 'bg-slate-600 cursor-not-allowed opacity-75'
+                  : showFeedbackLibrary
+                    ? 'bg-green-600 hover:bg-green-500 hover:scale-105 active:scale-95'
+                    : 'bg-slate-700 hover:bg-slate-600 hover:scale-105 active:scale-95'
+                }`}
               type="button"
             >
-              <BookOpen className="h-5 w-5" />
+              {showFeedbackLibrary ? <BookMarked className="h-5 w-5" /> : <BookOpen className="h-5 w-5" />}
               <span className="font-medium">{showFeedbackLibrary ? 'Hide Feedback Library' : 'Feedback Library'}</span>
             </button>
             <button
@@ -2352,7 +2470,7 @@ const handleShowWriterSuggestions = async () => {
           </div>
         )}
         
-        {/* PRESERVED: Enhanced conditional rendering with proper state handling */}
+        {/* ENHANCED: Improved conditional rendering with proper library coordination */}
         {showLibrary ? (
           <div key="script-library" className="fade-in">
             <ScriptLibrary onScriptSelected={handleScriptSelected} />

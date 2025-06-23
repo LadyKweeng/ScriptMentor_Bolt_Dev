@@ -21,11 +21,9 @@ import {
   Layers,
   Sparkles,
   Coins,
-  ArrowDown,
-  Save, 
+  ArrowDown, 
 } from 'lucide-react';
 import { backendApiService } from '../services/backendApiService';
-import { feedbackLibraryService } from '../services/feedbackLibraryService';
 
 interface ChunkedFeedbackViewProps {
   chunkedFeedback: ChunkedScriptFeedback;
@@ -105,7 +103,12 @@ const ChunkedFeedbackView: React.FC<ChunkedFeedbackViewProps> = ({
   // Generate AI overview when needed
   useEffect(() => {
     if (viewMode === 'overview' && !overviewContent) {
-      generateOverview();
+      // NEW: Check if overview already exists in the feedback object
+      if ((chunkedFeedback as any).overviewContent) {
+        setOverviewContent((chunkedFeedback as any).overviewContent);
+      } else {
+        generateOverview();
+      }
     }
   }, [chunkedFeedback.id, viewMode]);
 
@@ -222,9 +225,18 @@ Your overview should sound like it was written by you personally, not generated.
         
         if (overview) {
           setOverviewContent(overview);
+          // NEW: Store overview in the feedback object for persistence
+          if (chunkedFeedback && overview) {
+            (chunkedFeedback as any).overviewContent = overview;
+          }
         } else {
           // Fallback if API fails
-          setOverviewContent(generateFallbackOverview(chunkedFeedback, mentor));
+          const fallbackOverview = generateFallbackOverview(chunkedFeedback, mentor);
+          setOverviewContent(fallbackOverview);
+          // NEW: Store fallback overview in the feedback object for persistence
+          if (chunkedFeedback && fallbackOverview) {
+            (chunkedFeedback as any).overviewContent = fallbackOverview;
+          }
         }
       } catch (error) {
         console.error('Failed to generate AI overview:', error);
@@ -292,71 +304,6 @@ Your overview should sound like it was written by you personally, not generated.
     }
     
     return overview;
-  };
-
-  // NEW: Save feedback to library
-  const handleSaveToLibrary = async () => {
-    try {
-      if (!scriptId || !scriptTitle) {
-        console.error('Missing script context for saving to library');
-        return;
-      }
-
-      // Determine mentor information
-      const mentorIds = mentor.id === 'blended' ? ['blended'] : [mentor.id];
-      const mentorNames = mentor.name;
-      
-      // Determine page range - use currentPages prop or estimate from chunks
-      let pages = currentPages || 'Full Script';
-      if (!currentPages && chunkedFeedback.chunks && chunkedFeedback.chunks.length > 0) {
-        const firstChunk = chunkedFeedback.chunks[0];
-        const lastChunk = chunkedFeedback.chunks[chunkedFeedback.chunks.length - 1];
-        
-        if (firstChunk.startPage && lastChunk.endPage) {
-          pages = `Pages ${firstChunk.startPage}-${lastChunk.endPage}`;
-        } else {
-          // Estimate based on chunk count
-          const totalPages = chunkedFeedback.chunks.length * 15; // Assume ~15 pages per chunk
-          pages = `Pages 1-${totalPages}`;
-        }
-      }
-
-      // Convert chunked feedback to standard feedback format for saving
-      const feedbackForSaving = {
-        id: chunkedFeedback.id,
-        mentorId: mentor.id,
-        sceneId: 'chunked-script',
-        structuredContent: chunkedFeedback.chunks?.map(chunk => 
-          `=== ${chunk.chunkTitle || 'Untitled Chunk'} ===\n\n${chunk.structuredContent || ''}\n\n`
-        ).join(''),
-        scratchpadContent: chunkedFeedback.chunks?.map(chunk => 
-          `=== ${chunk.chunkTitle || 'Untitled Chunk'} ===\n\n${chunk.scratchpadContent || ''}\n\n`
-        ).join(''),
-        content: JSON.stringify(chunkedFeedback), // Save full chunked feedback
-        timestamp: chunkedFeedback.timestamp,
-        categories: {},
-        isChunked: true,
-        chunkedFeedback: chunkedFeedback
-      };
-
-      await feedbackLibraryService.saveFeedbackToLibrary(
-        scriptId,
-        scriptTitle,
-        mentorIds,
-        mentorNames,
-        pages,
-        feedbackForSaving
-      );
-
-      // Show success feedback
-      setCopiedItem('saved');
-      setTimeout(() => setCopiedItem(''), 3000);
-
-      console.log('✅ Chunked feedback saved to library successfully');
-    } catch (error) {
-      console.error('❌ Failed to save feedback to library:', error);
-      // Could add error state management here if needed
-    }
   };
 
   // Enhanced chunk status detection with blended feedback support
@@ -655,16 +602,6 @@ Your overview should sound like it was written by you personally, not generated.
               </div>
               
               <div className="flex items-center gap-2">
-                {/* NEW: Save to Library button */}
-                <button
-                  onClick={handleSaveToLibrary}
-                  className="text-xs text-green-400 hover:text-green-300 flex items-center gap-1 bg-green-500/10 px-2 py-1 rounded border border-green-500/30 transition-colors"
-                  title="Save feedback to library"
-                >
-                  <Save className="h-3 w-3" />
-                  {copiedItem === 'saved' ? 'Saved!' : 'Save to Library'}
-                </button>
-                
                 <button
                   onClick={copyAllFeedback}
                   className="text-xs text-slate-400 hover:text-slate-300 flex items-center gap-1"
