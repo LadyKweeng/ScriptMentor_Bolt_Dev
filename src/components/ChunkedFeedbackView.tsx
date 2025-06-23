@@ -22,8 +22,10 @@ import {
   Sparkles,
   Coins,
   ArrowDown,
+  Save, 
 } from 'lucide-react';
 import { backendApiService } from '../services/backendApiService';
+import { feedbackLibraryService } from '../services/feedbackLibraryService';
 
 interface ChunkedFeedbackViewProps {
   chunkedFeedback: ChunkedScriptFeedback;
@@ -40,6 +42,10 @@ interface ChunkedFeedbackViewProps {
   onModeChange?: (mode: FeedbackMode) => void;
   onShowWriterSuggestions?: () => void;  // Add this new prop
   selectedChunkId?: string | null; // NEW: Add selected chunk ID
+  // NEW: Add props for script context needed for saving
+  scriptId?: string;
+  scriptTitle?: string;
+  currentPages?: string;
 }
 
 type ViewMode = 'overview' | 'structured' | 'scratchpad';
@@ -71,7 +77,11 @@ const ChunkedFeedbackView: React.FC<ChunkedFeedbackViewProps> = ({
   feedbackMode = 'structured',
   onModeChange,
   onShowWriterSuggestions,
-  selectedChunkId // NEW: Add this parameter
+  selectedChunkId, // NEW: Add this parameter
+  // NEW: Add script context props
+  scriptId,
+  scriptTitle,
+  currentPages
 }) => {
   const [viewMode, setViewMode] = useState<ViewMode>('overview');
   const [expandedChunks, setExpandedChunks] = useState<Set<string>>(new Set());
@@ -282,6 +292,71 @@ Your overview should sound like it was written by you personally, not generated.
     }
     
     return overview;
+  };
+
+  // NEW: Save feedback to library
+  const handleSaveToLibrary = async () => {
+    try {
+      if (!scriptId || !scriptTitle) {
+        console.error('Missing script context for saving to library');
+        return;
+      }
+
+      // Determine mentor information
+      const mentorIds = mentor.id === 'blended' ? ['blended'] : [mentor.id];
+      const mentorNames = mentor.name;
+      
+      // Determine page range - use currentPages prop or estimate from chunks
+      let pages = currentPages || 'Full Script';
+      if (!currentPages && chunkedFeedback.chunks && chunkedFeedback.chunks.length > 0) {
+        const firstChunk = chunkedFeedback.chunks[0];
+        const lastChunk = chunkedFeedback.chunks[chunkedFeedback.chunks.length - 1];
+        
+        if (firstChunk.startPage && lastChunk.endPage) {
+          pages = `Pages ${firstChunk.startPage}-${lastChunk.endPage}`;
+        } else {
+          // Estimate based on chunk count
+          const totalPages = chunkedFeedback.chunks.length * 15; // Assume ~15 pages per chunk
+          pages = `Pages 1-${totalPages}`;
+        }
+      }
+
+      // Convert chunked feedback to standard feedback format for saving
+      const feedbackForSaving = {
+        id: chunkedFeedback.id,
+        mentorId: mentor.id,
+        sceneId: 'chunked-script',
+        structuredContent: chunkedFeedback.chunks?.map(chunk => 
+          `=== ${chunk.chunkTitle || 'Untitled Chunk'} ===\n\n${chunk.structuredContent || ''}\n\n`
+        ).join(''),
+        scratchpadContent: chunkedFeedback.chunks?.map(chunk => 
+          `=== ${chunk.chunkTitle || 'Untitled Chunk'} ===\n\n${chunk.scratchpadContent || ''}\n\n`
+        ).join(''),
+        content: JSON.stringify(chunkedFeedback), // Save full chunked feedback
+        timestamp: chunkedFeedback.timestamp,
+        categories: {},
+        isChunked: true,
+        chunkedFeedback: chunkedFeedback
+      };
+
+      await feedbackLibraryService.saveFeedbackToLibrary(
+        scriptId,
+        scriptTitle,
+        mentorIds,
+        mentorNames,
+        pages,
+        feedbackForSaving
+      );
+
+      // Show success feedback
+      setCopiedItem('saved');
+      setTimeout(() => setCopiedItem(''), 3000);
+
+      console.log('✅ Chunked feedback saved to library successfully');
+    } catch (error) {
+      console.error('❌ Failed to save feedback to library:', error);
+      // Could add error state management here if needed
+    }
   };
 
   // Enhanced chunk status detection with blended feedback support
@@ -518,59 +593,36 @@ Your overview should sound like it was written by you personally, not generated.
                 </div>
               </div>
 
-              {/* Enhanced Writer Suggestions Section */}
-              <div className="mt-6 pt-4 border-t border-slate-600/30">
-                <div className="bg-slate-700/20 rounded-lg p-4 border border-slate-600/30">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-3">
-                      <Sparkles className="h-5 w-5 text-yellow-400" />
-                      <div>
-                        <h4 className="font-medium text-white">Enhanced Writer Suggestions</h4>
-                        <p className="text-sm text-slate-400">
-                          Concrete before/after examples with {isBlended ? 'blended mentor' : 'mentor'} guidance
-                        </p>
-                      </div>
+              {/* Overall Recommendations Section */}
+              {chunkedFeedback.summary?.globalRecommendations && chunkedFeedback.summary.globalRecommendations.length > 0 && (
+                <div className="mt-6 pt-4 border-t border-slate-600/30">
+                  <div className="bg-slate-700/20 rounded-lg p-4 border border-slate-600/30">
+                    <div className="flex items-center gap-2 mb-3">
+                      <Target className="h-4 w-4 text-purple-400" />
+                      <h4 className="font-medium text-white text-sm">
+                        {isBlended ? 'Blended Mentoring Recommendations' : `${mentor.name}'s Overall Recommendations`}
+                      </h4>
+                    </div>
+                    <div className="space-y-2">
+                      {chunkedFeedback.summary.globalRecommendations.map((rec, index) => (
+                        <div key={index} className="flex items-start gap-2">
+                          <div className="w-1.5 h-1.5 rounded-full bg-purple-400 mt-2 flex-shrink-0"></div>
+                          <p className="text-slate-300 text-sm">{rec}</p>
+                        </div>
+                      ))}
                     </div>
 
-                    <div className="flex items-center gap-3">
-                      {/* Page/Section Info Badge */}
-                      {selectedChunkId && (
-                        <div className="flex items-center gap-2 text-sm bg-blue-600/20 text-blue-400 px-3 py-2 rounded-lg border border-blue-500/30">
-                          <FileText className="h-4 w-4" />
-                          <span className="font-medium">
-                            {getSelectedChunkTitle(chunkedFeedback.chunks || [], selectedChunkId)}
-                          </span>
-                        </div>
-                      )}
-
-                      <div className="flex flex-col items-end gap-2">
-                        <button
-                          onClick={onShowWriterSuggestions}
-                          className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded-md text-sm font-medium transition-all"
-                          type="button"
-                        >
-                          <Sparkles className="h-4 w-4" />
-                          View Suggestions
-                        </button>
-
-                        <div className="flex items-center gap-1 text-xs text-slate-400">
-                          <Coins className="h-3 w-3" />
-                          <span>8 tokens</span>
-                          <span className="text-slate-400">•</span>
-                          <span className="text-slate-500">30-45 seconds</span>
-                        </div>
-                      </div>
+                    <div className="mt-4 pt-3 border-t border-slate-600/30 text-center">
+                      <p className="text-sm text-yellow-400 italic">
+                        "{mentor.mantra || 'Every word must earn its place on the page.'}"
+                      </p>
+                      <p className="text-xs text-slate-400 mt-1">
+                        — {isBlended ? 'Blended Mentoring Philosophy' : mentor.name}
+                      </p>
                     </div>
-                  </div>
-
-                  <div className="flex items-center gap-2 text-xs text-green-400">
-                    <ArrowDown className="h-3 w-3" />
-                    <span>
-                      Click above to see your personalized rewrite suggestions{isBlended ? ' from blended mentors' : ''}!
-                    </span>
                   </div>
                 </div>
-              </div>
+              )}
             </div>
           </div>
         )}
@@ -602,13 +654,25 @@ Your overview should sound like it was written by you personally, not generated.
                 )}
               </div>
               
-              <button
-                onClick={copyAllFeedback}
-                className="text-xs text-slate-400 hover:text-slate-300 flex items-center gap-1"
-              >
-                <ClipboardCopy className="h-3 w-3" />
-                {copiedItem === 'all' ? 'Copied!' : 'Copy All'}
-              </button>
+              <div className="flex items-center gap-2">
+                {/* NEW: Save to Library button */}
+                <button
+                  onClick={handleSaveToLibrary}
+                  className="text-xs text-green-400 hover:text-green-300 flex items-center gap-1 bg-green-500/10 px-2 py-1 rounded border border-green-500/30 transition-colors"
+                  title="Save feedback to library"
+                >
+                  <Save className="h-3 w-3" />
+                  {copiedItem === 'saved' ? 'Saved!' : 'Save to Library'}
+                </button>
+                
+                <button
+                  onClick={copyAllFeedback}
+                  className="text-xs text-slate-400 hover:text-slate-300 flex items-center gap-1"
+                >
+                  <ClipboardCopy className="h-3 w-3" />
+                  {copiedItem === 'all' ? 'Copied!' : 'Copy All'}
+                </button>
+              </div>
             </div>
 
             {/* Enhanced Chunks List with Error Handling */}
@@ -751,34 +815,49 @@ Your overview should sound like it was written by you personally, not generated.
           </>
         )}
 
-        {/* Enhanced Global Recommendations Footer with Blended Support */}
-        {chunkedFeedback.summary?.globalRecommendations && chunkedFeedback.summary.globalRecommendations.length > 0 && (
-          <div className="p-4 bg-slate-700/30 border-t border-slate-600/50 flex-shrink-0">
-            <div className="flex items-center gap-2 mb-3">
-              <Target className="h-4 w-4 text-purple-400" />
-              <h4 className="font-medium text-white text-sm">
-                {isBlended ? 'Blended Mentoring Recommendations' : `${mentor.name}'s Overall Recommendations`}
-              </h4>
-            </div>
-            <div className="space-y-2">
-              {chunkedFeedback.summary.globalRecommendations.map((rec, index) => (
-                <div key={index} className="flex items-start gap-2">
-                  <div className="w-1.5 h-1.5 rounded-full bg-purple-400 mt-2 flex-shrink-0"></div>
-                  <p className="text-slate-300 text-sm">{rec}</p>
+        {/* Enhanced Writer Suggestions Footer with Blended Support */}
+        <div className="p-4 bg-slate-700/30 border-t border-slate-600/50 flex-shrink-0">
+          <div className="bg-slate-700/20 rounded-lg p-4 border border-slate-600/30">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-3">
+                <Sparkles className="h-5 w-5 text-yellow-400" />
+                <div>
+                  <h4 className="font-medium text-white">Enhanced Writer Suggestions</h4>
+                  <p className="text-sm text-slate-400">
+                    Concrete before/after examples with {isBlended ? 'blended mentor' : 'mentor'} guidance
+                  </p>
                 </div>
-              ))}
-            </div>
-            
-            <div className="mt-4 pt-3 border-t border-slate-600/30 text-center">
-              <p className="text-sm text-yellow-400 italic">
-                "{mentor.mantra || 'Every word must earn its place on the page.'}"
-              </p>
-              <p className="text-xs text-slate-400 mt-1">
-                — {isBlended ? 'Blended Mentoring Philosophy' : mentor.name}
-              </p>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div className="flex flex-col gap-2">
+                  <button
+                    onClick={onShowWriterSuggestions}
+                    className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded-md text-sm font-medium transition-all"
+                    type="button"
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    <div className="flex flex-col items-start">
+                      <span>View Suggestions</span>
+                      {selectedChunkId && (
+                        <span className="text-xs opacity-90">
+                          {getSelectedChunkTitle(chunkedFeedback.chunks || [], selectedChunkId)}
+                        </span>
+                      )}
+                    </div>
+                  </button>
+
+                  <div className="flex items-center gap-1 text-xs text-slate-400 ml-2">
+                    <Coins className="h-3 w-3" />
+                    <span>8 tokens</span>
+                    <span className="text-slate-400">•</span>
+                    <span className="text-slate-500">30-45 seconds</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
-        )}
+        </div>
 
         {/* Processing Stats Footer with Enhanced Blended Support */}
         {(chunkedFeedback as any).processingStats && (

@@ -43,8 +43,10 @@ import { CharacterDataNormalizer } from './utils/characterDataNormalizer';
 import { BookOpenCheck, Files, Activity, BookText, BookOpen, BookMarked, BarChart3, Sparkles, ArrowDown, LogOut, Layers, FileText, RefreshCw, AlertCircle, Coins, Crown, Zap, TrendingUp } from 'lucide-react';
 import { processSceneText } from './utils/scriptFormatter';
 import ScriptLibrary from './components/ScriptLibrary';
+import FeedbackLibrary from './components/FeedbackLibrary'; // NEW: Add FeedbackLibrary component
 import RewriteEvaluation from './components/RewriteEvaluation';
 import { enhancedScriptRewriter } from './utils/enhancedScriptRewriter';
+import { feedbackLibraryService } from './services/feedbackLibraryService'; // NEW: Add feedback library service
 
 // PRESERVED: Fixed LibraryButton component - moved outside App component to prevent recreation
 const LibraryButton: React.FC<{
@@ -95,6 +97,7 @@ const App: React.FC = () => {
   
   // PRESERVED: Library state - Fixed with proper state management
   const [showLibrary, setShowLibrary] = useState(false);
+  const [showFeedbackLibrary, setShowFeedbackLibrary] = useState(false); // NEW: Add feedback library state
   
   // NEW: Enhanced token-related state
   const [userTokens, setUserTokens] = useState<UserTokens | null>(null);
@@ -316,6 +319,25 @@ const App: React.FC = () => {
     const startPage = (chunkIndex * avgPagesPerChunk) + 1;
     const endPage = startPage + avgPagesPerChunk - 1;
     return `Pages ${startPage}-${endPage}`;
+  };
+
+  // NEW: Helper function to get current page range for library saving
+  const getCurrentPageRange = (): string => {
+    if (!currentScript) return 'Unknown Pages';
+    
+    if (isChunkedScript && selectedChunkId && currentScript.chunks) {
+      const chunk = currentScript.chunks.find(c => c.id === selectedChunkId);
+      if (chunk && chunk.startPage && chunk.endPage) {
+        return `Pages ${chunk.startPage}-${chunk.endPage}`;
+      }
+    }
+    
+    // For full script or unknown ranges
+    if (currentScript.totalPages) {
+      return `Pages 1-${currentScript.totalPages}`;
+    }
+    
+    return 'Full Script';
   };
 
   // ENHANCED: Complete script selection handler with comprehensive state reset
@@ -1936,6 +1958,46 @@ const handleShowWriterSuggestions = async () => {
     setCharacters(normalizedCharacters);
   };
   
+  // NEW: Handle feedback library selection
+  const handleFeedbackLibrarySelection = async (item: any) => {
+    try {
+      console.log('📚 Loading feedback from library:', item.id);
+      const decryptedItem = await feedbackLibraryService.getFeedbackLibraryItem(item.id);
+      
+      // Load the feedback into the feedback viewer
+      setFeedback(decryptedItem.content);
+      setSelectedMentorId(decryptedItem.content.mentorId || 'blended');
+      
+      // Close the feedback library
+      setShowFeedbackLibrary(false);
+      
+      console.log('✅ Feedback loaded from library successfully');
+    } catch (error) {
+      console.error('❌ Failed to load feedback from library:', error);
+      setTokenError(`Failed to load feedback: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  };
+
+  // NEW: Handle writer suggestions library selection
+  const handleWriterSuggestionsLibrarySelection = async (item: any) => {
+    try {
+      console.log('📚 Loading writer suggestions from library:', item.id);
+      const decryptedItem = await feedbackLibraryService.getFeedbackLibraryItem(item.id);
+      
+      // Load writer suggestions viewer with the saved content
+      setWriterSuggestions(decryptedItem.content);
+      setShowWriterSuggestions(true);
+      
+      // Close the feedback library
+      setShowFeedbackLibrary(false);
+      
+      console.log('✅ Writer suggestions loaded from library successfully');
+    } catch (error) {
+      console.error('❌ Failed to load writer suggestions from library:', error);
+      setTokenError(`Failed to load writer suggestions: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  };
+  
   // PRESERVED: Complete mentor selection logic
   const selectedMentor = selectedMentorId === 'blended' 
     ? { 
@@ -1994,15 +2056,15 @@ const handleShowWriterSuggestions = async () => {
             </div>
           </div>
           
-          <div className="flex flex-col items-end gap-2">
+          <div className="flex flex-col gap-2">
             <button
               onClick={handleShowWriterSuggestions}
               disabled={isGeneratingWriterSuggestions || !selectedMentor}
               className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${isGeneratingWriterSuggestions || !selectedMentor
-                  ? 'bg-slate-600 text-slate-400 cursor-not-allowed'
-                  : writerSuggestionsReady
-                    ? 'bg-green-600 hover:bg-green-500 text-white animate-pulse'
-                    : 'bg-yellow-600 hover:bg-yellow-500 text-white'
+                ? 'bg-slate-600 text-slate-400 cursor-not-allowed'
+                : writerSuggestionsReady
+                  ? 'bg-green-600 hover:bg-green-500 text-white animate-pulse'
+                  : 'bg-yellow-600 hover:bg-yellow-500 text-white'
                 }`}
             >
               {isGeneratingWriterSuggestions ? (
@@ -2013,7 +2075,14 @@ const handleShowWriterSuggestions = async () => {
               ) : writerSuggestionsReady ? (
                 <>
                   <Sparkles className="h-4 w-4" />
-                  View Suggestions
+                  <div className="flex flex-col items-start">
+                    <span>View Suggestions</span>
+                    {isChunkedScript && selectedChunkId && (
+                      <span className="text-xs opacity-90">
+                        {getChunkDisplayTitle(selectedChunkId)}
+                      </span>
+                    )}
+                  </div>
                 </>
               ) : (
                 <>
@@ -2022,27 +2091,18 @@ const handleShowWriterSuggestions = async () => {
                 </>
               )}
             </button>
-            
-            {/* NEW: Token cost preview for writer suggestions */}
-            {session?.user && (
-              <TokenCostPreview 
-                actionType="writer_agent"
-                className="text-xs text-slate-400"
-              />
-            )}
+
+            <div className="flex items-center gap-1 text-xs text-slate-400 justify-end">
+              {/* NEW: Token cost preview for writer suggestions */}
+              {session?.user && (
+                <TokenCostPreview
+                  actionType="writer_agent"
+                  className="text-xs text-slate-400"
+                />
+              )}
+            </div>
           </div>
         </div>
-        
-        {writerSuggestionsReady && (
-          <div className="mt-3 flex items-center gap-2 text-xs text-green-400">
-            <ArrowDown className="h-3 w-3" />
-            <span>
-              Click above to see your personalized rewrite suggestions
-              {isBlendedFeedback ? ' from blended mentors' : ''}
-              {isChunkedScript && selectedChunkId ? ` for ${getChunkDisplayTitle(selectedChunkId)}` : ''}!
-            </span>
-          </div>
-        )}
       </div>
     );
   };
@@ -2102,13 +2162,17 @@ const handleShowWriterSuggestions = async () => {
                   {/* Check if this is chunked feedback by checking for chunks property */}
                   {partialFeedback.isChunked || (partialFeedback as any).chunks ? (
                     <ChunkedFeedbackView 
-                      chunkedFeedback={partialFeedback as any}
-                      mentor={selectedMentor}
-                      feedbackMode={feedbackMode}
-                      onModeChange={selectedMentorId !== 'blended' ? handleFeedbackModeChange : undefined}
-                      onShowWriterSuggestions={handleShowWriterSuggestions}
-                      selectedChunkId={selectedChunkId} // NEW: Pass selected chunk ID
-                    />
+                        chunkedFeedback={partialFeedback as any}
+                        mentor={selectedMentor}
+                        feedbackMode={feedbackMode}
+                        onModeChange={selectedMentorId !== 'blended' ? handleFeedbackModeChange : undefined}
+                        onShowWriterSuggestions={handleShowWriterSuggestions}
+                        selectedChunkId={selectedChunkId} // NEW: Pass selected chunk ID
+                        // NEW: Pass script context for library saving
+                        scriptId={currentScript?.id}
+                        scriptTitle={currentScript?.title}
+                        currentPages={getCurrentPageRange()}
+                      />
                   ) : (
                     <FeedbackView 
                       feedback={partialFeedback} 
@@ -2130,6 +2194,10 @@ const handleShowWriterSuggestions = async () => {
                         onModeChange={selectedMentorId !== 'blended' ? handleFeedbackModeChange : undefined}
                         onShowWriterSuggestions={handleShowWriterSuggestions}
                         selectedChunkId={selectedChunkId} // NEW: Pass selected chunk ID
+                        // NEW: Pass script context for library saving
+                        scriptId={currentScript?.id}
+                        scriptTitle={currentScript?.title}
+                        currentPages={getCurrentPageRange()}
                       />
                     ) : (
                       <FeedbackView
@@ -2237,6 +2305,15 @@ const handleShowWriterSuggestions = async () => {
               showLibrary={showLibrary} 
               onToggle={handleToggleLibrary} 
             />
+            {/* NEW: Feedback Library Button */}
+            <button
+              onClick={() => setShowFeedbackLibrary(!showFeedbackLibrary)}
+              className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-md transition-all duration-200 ease-in-out transform hover:scale-105 active:scale-95"
+              type="button"
+            >
+              <BookOpen className="h-5 w-5" />
+              <span className="font-medium">{showFeedbackLibrary ? 'Hide Feedback Library' : 'Feedback Library'}</span>
+            </button>
             <button
               onClick={handleSignOut}
               className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-md transition-colors"
@@ -2279,6 +2356,13 @@ const handleShowWriterSuggestions = async () => {
         {showLibrary ? (
           <div key="script-library" className="fade-in">
             <ScriptLibrary onScriptSelected={handleScriptSelected} />
+          </div>
+        ) : showFeedbackLibrary ? (
+          <div key="feedback-library" className="fade-in">
+            <FeedbackLibrary
+              onFeedbackSelected={handleFeedbackLibrarySelection}
+              onWriterSuggestionsSelected={handleWriterSuggestionsLibrarySelection}
+            />
           </div>
         ) : (
           <div key="main-content" className="fade-in">

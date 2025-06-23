@@ -383,44 +383,37 @@ Your overview should sound like it was written by you personally, not generated.
                 </div>
               </div>
 
-              {/* Enhanced Writer Suggestions Section */}
+              {/* Mentor Recommendations Section */}
               <div className="mt-6 pt-4 border-t border-slate-600/30">
                 <div className="bg-slate-700/20 rounded-lg p-4 border border-slate-600/30">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <Sparkles className="h-5 w-5 text-yellow-400" />
-                      <div>
-                        <h4 className="font-medium text-white">Enhanced Writer Suggestions</h4>
-                        <p className="text-sm text-slate-400">
-                          Concrete before/after examples with {isBlended ? 'blended mentor' : 'mentor'} guidance
-                        </p>
-                      </div>
+                  <div className="flex items-center gap-2 mb-3">
+                    <Target className="h-4 w-4 text-purple-400" />
+                    <h4 className="font-medium text-white text-sm">
+                      {isBlended ? 'Blended Mentoring Recommendations' : `${mentor.name}'s Key Recommendations`}
+                    </h4>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex items-start gap-2">
+                      <div className="w-1.5 h-1.5 rounded-full bg-purple-400 mt-2 flex-shrink-0"></div>
+                      <p className="text-slate-300 text-sm">Focus on strengthening character objectives and obstacles</p>
                     </div>
-                    
-                    <div className="flex flex-col items-end gap-2">
-                      <button
-                        onClick={onShowWriterSuggestions}
-                        className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded-md text-sm font-medium transition-all"
-                        type="button"
-                      >
-                        <Sparkles className="h-4 w-4" />
-                        View Suggestions
-                      </button>
-                      
-                      <div className="flex items-center gap-1 text-xs text-slate-400">
-                        <Coins className="h-3 w-3" />
-                        <span>8 tokens</span>
-                        <span className="text-slate-400">•</span>
-                        <span className="text-slate-500">30-45 seconds</span>
-                      </div>
+                    <div className="flex items-start gap-2">
+                      <div className="w-1.5 h-1.5 rounded-full bg-purple-400 mt-2 flex-shrink-0"></div>
+                      <p className="text-slate-300 text-sm">Enhance dialogue efficiency and subtext</p>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <div className="w-1.5 h-1.5 rounded-full bg-purple-400 mt-2 flex-shrink-0"></div>
+                      <p className="text-slate-300 text-sm">Tighten scene structure for maximum dramatic impact</p>
                     </div>
                   </div>
-                  
-                  <div className="mt-3 flex items-center gap-2 text-xs text-green-400">
-                    <ArrowDown className="h-3 w-3" />
-                    <span>
-                      Click above to see your personalized rewrite suggestions{isBlended ? ' from blended mentors' : ''}!
-                    </span>
+
+                  <div className="mt-4 pt-3 border-t border-slate-600/30 text-center">
+                    <p className="text-sm text-yellow-400 italic">
+                      "{mentor.mantra || 'Every script has a story worth telling.'}"
+                    </p>
+                    <p className="text-xs text-slate-400 mt-1">
+                      — {isBlended ? 'Blended Mentoring Philosophy' : mentor.name}
+                    </p>
                   </div>
                 </div>
               </div>
@@ -455,14 +448,39 @@ Your overview should sound like it was written by you personally, not generated.
             </div>
           )}
 
-          {/* Mentor quote */}
-          <div className="mt-6 pt-4 border-t border-slate-600 text-center">
-            <p className="text-sm text-yellow-400 italic">
-              "{mentor.mantra || 'Every script has a story worth telling.'}"
-            </p>
-            <p className="text-xs text-slate-400 mt-1">
-              — {isBlended ? 'Blended Mentoring Philosophy' : mentor.name}
-            </p>
+          {/* Enhanced Writer Suggestions Footer */}
+          <div className="mt-6 pt-4 border-t border-slate-600">
+            <div className="bg-slate-700/20 rounded-lg p-4 border border-slate-600/30">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Sparkles className="h-5 w-5 text-yellow-400" />
+                  <div>
+                    <h4 className="font-medium text-white">Enhanced Writer Suggestions</h4>
+                    <p className="text-sm text-slate-400">
+                      Concrete before/after examples with {isBlended ? 'blended mentor' : 'mentor'} guidance
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <button
+                    onClick={onShowWriterSuggestions}
+                    className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded-md text-sm font-medium transition-all"
+                    type="button"
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    View Suggestions
+                  </button>
+
+                  <div className="flex items-center gap-1 text-xs text-slate-400 justify-end">
+                    <Coins className="h-3 w-3" />
+                    <span>8 tokens</span>
+                    <span className="text-slate-400">•</span>
+                    <span className="text-slate-500">30-45 seconds</span>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
