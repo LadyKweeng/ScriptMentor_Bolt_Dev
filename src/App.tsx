@@ -52,17 +52,14 @@ import { feedbackLibraryService } from './services/feedbackLibraryService'; // N
 const LibraryButton: React.FC<{
   showLibrary: boolean;
   onToggle: () => void;
-  disabled?: boolean;
-}> = React.memo(({ showLibrary, onToggle, disabled = false }) => (
+}> = React.memo(({ showLibrary, onToggle }) => (
   <button
     onClick={onToggle}
-    disabled={disabled}
-    className={`flex items-center gap-2 px-4 py-2 rounded-md transition-all duration-200 ease-in-out transform text-white ${disabled
-        ? 'bg-slate-600 cursor-not-allowed opacity-75'
-        : showLibrary
-          ? 'bg-blue-600 hover:bg-blue-500 hover:scale-105 active:scale-95'
-          : 'bg-slate-700 hover:bg-slate-600 hover:scale-105 active:scale-95'
-      }`}
+    className={`flex items-center gap-2 px-4 py-2 rounded-md transition-all duration-200 ease-in-out transform text-white library-button ${
+      showLibrary
+        ? 'bg-blue-600 hover:bg-blue-500 hover:scale-105 active:scale-95'
+        : 'bg-slate-700 hover:bg-slate-600 hover:scale-105 active:scale-95'
+    }`}
     type="button"
   >
     {showLibrary ? <BookMarked className="h-5 w-5" /> : <BookOpen className="h-5 w-5" />}
@@ -220,39 +217,36 @@ const App: React.FC = () => {
     setRewriteAnalysis(null);
   };
 
-// ENHANCED: Fixed toggle function with proper library coordination
-  const handleToggleLibrary = useCallback(() => {
-    console.log('📚 Toggling script library');
-    setShowLibrary(prev => {
-      const newState = !prev;
-      console.log('📚 New script library state:', newState);
+// SIMPLIFIED: Direct toggle handlers that allow seamless switching
+const handleToggleLibrary = useCallback(() => {
+  console.log('📚 Toggling script library');
+  setShowLibrary(prev => {
+    const newState = !prev;
+    console.log('📚 New script library state:', newState);
+    
+    // If opening script library, automatically close feedback library
+    if (newState) {
+      setShowFeedbackLibrary(false);
+    }
+    
+    return newState;
+  });
+}, []); // Remove dependencies for cleaner logic
 
-      // NEW: Close feedback library when opening script library
-      if (newState && showFeedbackLibrary) {
-        console.log('📚 Closing feedback library to open script library');
-        setShowFeedbackLibrary(false);
-      }
-
-      return newState;
-    });
-  }, [showFeedbackLibrary]); // Add showFeedbackLibrary dependency
-
-  // NEW: Handle feedback library toggle with proper coordination
-  const handleToggleFeedbackLibrary = useCallback(() => {
-    console.log('📚 Toggling feedback library');
-    setShowFeedbackLibrary(prev => {
-      const newState = !prev;
-      console.log('📚 New feedback library state:', newState);
-
-      // NEW: Close script library when opening feedback library
-      if (newState && showLibrary) {
-        console.log('📚 Closing script library to open feedback library');
-        setShowLibrary(false);
-      }
-
-      return newState;
-    });
-  }, [showLibrary]); // Add showLibrary dependency
+const handleToggleFeedbackLibrary = useCallback(() => {
+  console.log('📚 Toggling feedback library');
+  setShowFeedbackLibrary(prev => {
+    const newState = !prev;
+    console.log('📚 New feedback library state:', newState);
+    
+    // If opening feedback library, automatically close script library
+    if (newState) {
+      setShowLibrary(false);
+    }
+    
+    return newState;
+  });
+}, []); // Remove dependencies for cleaner logic
 
   // PRESERVED: ENHANCED CANCEL FUNCTION - Properly stops backend processing
   const handleCancelProcessing = async () => {
@@ -376,7 +370,7 @@ const App: React.FC = () => {
     try {
       setIsLoadingScript(true);
 
-      // NEW: Close both libraries immediately when script is selected
+      // Close both libraries immediately when script is selected
       console.log('📖 Script selected, closing all libraries');
       setShowLibrary(false);
       setShowFeedbackLibrary(false);
@@ -2412,20 +2406,15 @@ const handleShowWriterSuggestions = async () => {
               </div>
             )}
             
-            <LibraryButton 
-              showLibrary={showLibrary} 
+            <LibraryButton
+              showLibrary={showLibrary}
               onToggle={handleToggleLibrary}
-              disabled={showFeedbackLibrary} // NEW: Visual indication when other library is open
             />
-            {/* ENHANCED: Feedback Library Button with proper toggle handler */}
             <button
               onClick={handleToggleFeedbackLibrary}
-              disabled={showLibrary}
-              className={`flex items-center gap-2 px-4 py-2 rounded-md transition-all duration-200 ease-in-out transform text-white ${showLibrary
-                  ? 'bg-slate-600 cursor-not-allowed opacity-75'
-                  : showFeedbackLibrary
-                    ? 'bg-green-600 hover:bg-green-500 hover:scale-105 active:scale-95'
-                    : 'bg-slate-700 hover:bg-slate-600 hover:scale-105 active:scale-95'
+              className={`flex items-center gap-2 px-4 py-2 rounded-md transition-all duration-200 ease-in-out transform text-white library-button ${showFeedbackLibrary
+                  ? 'bg-green-600 hover:bg-green-500 hover:scale-105 active:scale-95'
+                  : 'bg-slate-700 hover:bg-slate-600 hover:scale-105 active:scale-95'
                 }`}
               type="button"
             >
