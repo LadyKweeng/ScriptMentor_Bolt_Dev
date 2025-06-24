@@ -606,26 +606,34 @@ const handleToggleFeedbackLibrary = useCallback(() => {
 
             console.log('✅ Token-aware progressive chunked feedback complete');
 
-            // AUTO-SAVE: Save complete feedback session to library with robust context validation
+            // ENHANCED AUTO-SAVE: Better error handling and timing validation
             try {
-              // FIXED: Add robust fallback logic similar to Writer Suggestions
-              const effectiveScriptId = script.id ||
-                finalFeedback.sceneId ||
-                finalFeedback.id ||
-                `chunked-script-${Date.now()}`;
+              // STEP 1: Enhanced UUID validation with timing context
+              const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+              const isValidUUID = script.id && uuidRegex.test(script.id);
 
-              const effectiveScriptTitle = script.title ||
-                'Chunked Script Feedback' ||
-                `Script - ${new Date().toLocaleDateString()}`;
+              if (!isValidUUID) {
+                // ENHANCED: Check if this is a timing issue with new uploads
+                if (script.id && script.id.startsWith('script_')) {
+                  console.warn('⚠️ Auto-save skipped: New script upload still using temporary ID, this is expected for new uploads:', script.id);
+                  console.info('ℹ️ Script will be auto-saved after database sync completes');
+                  return; // Skip gracefully for new uploads
+                } else {
+                  console.warn('⚠️ Auto-save failed: Script ID is not a valid UUID:', script.id);
+                  throw new Error(`Invalid script ID format for auto-save: ${script.id}`);
+                }
+              }
 
+              // STEP 2: Build effective context with validated ID
+              const effectiveScriptId = script.id; // Use validated UUID
+              const effectiveScriptTitle = script.title || 'Chunked Script Feedback';
               const effectivePages = script.totalPages
                 ? `Pages 1-${script.totalPages}`
                 : `${script.chunks.length} Sections`;
 
-              console.log('📚 Auto-saving chunked feedback with context:', {
-                originalScriptId: script.id,
-                effectiveScriptId: effectiveScriptId,
-                effectiveScriptTitle: effectiveScriptTitle,
+              console.log('📚 Auto-saving chunked feedback with validated UUID context:', {
+                scriptUUID: effectiveScriptId,
+                scriptTitle: effectiveScriptTitle,
                 mentorId: mentor.id,
                 feedbackId: finalFeedback.id,
                 chunkCount: script.chunks.length,
@@ -641,17 +649,26 @@ const handleToggleFeedbackLibrary = useCallback(() => {
                 finalFeedback,
                 script.originalContent
               );
-              console.log('✅ Feedback session auto-saved to library');
+              console.log('✅ Feedback session auto-saved to library with UUID');
             } catch (error) {
-              console.warn('⚠️ Failed to auto-save feedback session:', error);
-              console.warn('Auto-save context details:', {
-                originalScriptId: script.id,
-                scriptTitle: script.title,
-                feedbackId: finalFeedback?.id,
-                mentorId: mentor.id,
-                hasOriginalContent: !!script.originalContent,
-                error: error instanceof Error ? error.message : 'Unknown error'
-              });
+              // ENHANCED: More specific error handling
+              const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+
+              if (errorMessage.includes('temporary ID') || errorMessage.includes('script_')) {
+                console.info('ℹ️ Auto-save gracefully skipped for new script upload - this is expected');
+              } else {
+                console.warn('⚠️ Auto-save failed (feedback generation continues normally):', errorMessage);
+                console.warn('Auto-save diagnostic info:', {
+                  scriptId: script.id,
+                  scriptIdType: typeof script.id,
+                  scriptIdLength: script.id?.length,
+                  scriptTitle: script.title,
+                  feedbackId: finalFeedback?.id,
+                  mentorId: mentor.id,
+                  isNewUpload: script.id?.startsWith('script_') ? 'yes' : 'no'
+                });
+              }
+              // Never throw - auto-save failure shouldn't break feedback generation
             }
 
             // Start writer suggestions in background (with cancellation support)
@@ -735,12 +752,35 @@ const handleToggleFeedbackLibrary = useCallback(() => {
           setDiffLines([]);
           
           console.log('✅ Progressive chunked feedback complete');
-          
+
+          // ENHANCED AUTO-SAVE: Legacy path with UUID validation
+          try {
+            const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+            const isValidUUID = script.id && uuidRegex.test(script.id);
+
+            if (isValidUUID) {
+              await feedbackLibraryService.saveFeedbackSessionToLibrary(
+                script.id,
+                script.title || 'Chunked Script Feedback',
+                [mentor.id],
+                mentor.name,
+                script.totalPages ? `Pages 1-${script.totalPages}` : `${script.chunks.length} Sections`,
+                finalFeedback,
+                script.originalContent
+              );
+              console.log('✅ Legacy chunked feedback auto-saved to library with UUID');
+            } else {
+              console.warn('⚠️ Legacy chunked feedback: Invalid UUID, skipping auto-save:', script.id);
+            }
+          } catch (error) {
+            console.warn('⚠️ Legacy chunked feedback auto-save failed (non-critical):', error);
+          }
+
           // Start writer suggestions in background (with cancellation support)
           if (!abortController.signal.aborted && selectedChunkId) {
             const selectedChunk = script.chunks.find(c => c.id === selectedChunkId);
             const chunkFeedback = newFeedback.chunks.find(cf => cf.chunkId === selectedChunkId);
-            
+
             if (selectedChunk && chunkFeedback && !(chunkFeedback as any).processingError) {
               setIsGeneratingWriterSuggestions(true);
               setWriterSuggestionsStarted(true);
@@ -861,22 +901,31 @@ if (session?.user) {
       
       console.log('✅ Token-aware progressive single scene feedback complete');
 
-      // AUTO-SAVE: Save complete feedback session to library with robust context validation
+      // ENHANCED AUTO-SAVE: Better error handling and timing validation
       try {
-        // FIXED: Add robust fallback logic similar to Writer Suggestions
-        const effectiveScriptId = scene.id ||
-          result.feedback.sceneId ||
-          result.feedback.id ||
-          `single-scene-${Date.now()}`;
+        // STEP 1: Enhanced UUID validation with timing context
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+        const isValidUUID = scene.id && uuidRegex.test(scene.id);
 
-        const effectiveScriptTitle = scene.title ||
-          'Single Scene Feedback' ||
-          `Scene - ${new Date().toLocaleDateString()}`;
+        if (!isValidUUID) {
+          // ENHANCED: Check if this is a timing issue with new uploads
+          if (scene.id && scene.id.startsWith('script_')) {
+            console.warn('⚠️ Auto-save skipped: New scene upload still using temporary ID, this is expected for new uploads:', scene.id);
+            console.info('ℹ️ Scene will be auto-saved after database sync completes');
+            return; // Skip gracefully for new uploads
+          } else {
+            console.warn('⚠️ Auto-save failed: Scene ID is not a valid UUID:', scene.id);
+            throw new Error(`Invalid scene ID format for auto-save: ${scene.id}`);
+          }
+        }
 
-        console.log('📚 Auto-saving single scene feedback with context:', {
-          originalSceneId: scene.id,
-          effectiveScriptId: effectiveScriptId,
-          effectiveScriptTitle: effectiveScriptTitle,
+        // STEP 2: Build effective context with validated ID
+        const effectiveScriptId = scene.id; // Use validated UUID
+        const effectiveScriptTitle = scene.title || 'Single Scene Feedback';
+
+        console.log('📚 Auto-saving single scene feedback with validated UUID context:', {
+          sceneUUID: effectiveScriptId,
+          sceneTitle: effectiveScriptTitle,
           mentorId: mentor.id,
           feedbackId: result.feedback.id,
           hasSceneContent: !!scene.content
@@ -891,16 +940,26 @@ if (session?.user) {
           result.feedback,
           scene.content
         );
-        console.log('✅ Single scene feedback auto-saved to library');
+        console.log('✅ Single scene feedback auto-saved to library with UUID');
       } catch (error) {
-        console.warn('⚠️ Failed to auto-save single scene feedback:', error);
-        console.warn('Auto-save context details:', {
-          sceneId: scene.id,
-          sceneTitle: scene.title,
-          feedbackId: result.feedback?.id,
-          mentorId: mentor.id,
-          error: error instanceof Error ? error.message : 'Unknown error'
-        });
+        // ENHANCED: More specific error handling
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+
+        if (errorMessage.includes('temporary ID') || errorMessage.includes('script_')) {
+          console.info('ℹ️ Auto-save gracefully skipped for new scene upload - this is expected');
+        } else {
+          console.warn('⚠️ Auto-save failed (feedback generation continues normally):', errorMessage);
+          console.warn('Auto-save diagnostic info:', {
+            sceneId: scene.id,
+            sceneIdType: typeof scene.id,
+            sceneIdLength: scene.id?.length,
+            sceneTitle: scene.title,
+            feedbackId: result.feedback?.id,
+            mentorId: mentor.id,
+            isNewUpload: scene.id?.startsWith('script_') ? 'yes' : 'no'
+          });
+        }
+        // Never throw - auto-save failure shouldn't break feedback generation
       }
 
       // Start writer suggestions in background
@@ -992,7 +1051,30 @@ if (session?.user) {
           setDiffLines([]);
           
           console.log('✅ Progressive single scene feedback complete');
-          
+
+          // ENHANCED AUTO-SAVE: Legacy path with UUID validation
+          try {
+            const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+            const isValidUUID = scene.id && uuidRegex.test(scene.id);
+
+            if (isValidUUID) {
+              await feedbackLibraryService.saveFeedbackSessionToLibrary(
+                scene.id,
+                scene.title || 'Single Scene Feedback',
+                [mentor.id],
+                mentor.name,
+                'Single Scene',
+                finalFeedback,
+                scene.content
+              );
+              console.log('✅ Legacy single scene feedback auto-saved to library with UUID');
+            } else {
+              console.warn('⚠️ Legacy single scene feedback: Invalid UUID, skipping auto-save:', scene.id);
+            }
+          } catch (error) {
+            console.warn('⚠️ Legacy single scene feedback auto-save failed (non-critical):', error);
+          }
+
           // Start writer suggestions in background (with cancellation support)
           if (!abortController.signal.aborted) {
             setIsGeneratingWriterSuggestions(true);
@@ -1721,32 +1803,66 @@ const handleShowWriterSuggestions = async () => {
       const shouldChunk = content.length > 50000; // Chunk scripts longer than ~50k characters
       
       if (shouldChunk) {
-        console.log('📄 Creating chunked script...', chunkingOptions);
-        
+        console.log('📄 Creating chunked script with FIXED timing...', chunkingOptions);
+
         // Process as chunked script
         const fullScript = ScriptChunker.chunkScript(content, title, parsedCharacters, chunkingOptions);
-        
+
         // Normalize character data for chunked script to prevent type errors
         const normalizedCharacters = CharacterDataNormalizer.normalizeCharacters(fullScript.characters);
         console.log('🔧 Normalized character data for chunked script:', normalizedCharacters);
-        
+
         // Update the script with normalized characters
         fullScript.characters = normalizedCharacters;
-        
+
+        // FIXED TIMING: Save to database FIRST to get proper UUID
+        console.log('💾 Saving chunked script to database first to get UUID...');
+        let databaseUUID: string;
+
+        try {
+          databaseUUID = await supabaseScriptService.saveScript(
+            content,
+            title,
+            content, // processedContent
+            normalizedCharacters,
+            null, // No feedback yet
+            undefined,
+            undefined,
+            fullScript
+          );
+
+          if (!databaseUUID || typeof databaseUUID !== 'string') {
+            throw new Error('Invalid UUID returned from database');
+          }
+
+          console.log('✅ Chunked script saved to Supabase with UUID:', {
+            tempId: fullScript.id,
+            databaseUUID: databaseUUID,
+            title: fullScript.title,
+            chunkCount: fullScript.chunks.length
+          });
+        } catch (error) {
+          console.error('❌ Failed to save chunked script to Supabase:', error);
+          // FALLBACK: Use temporary ID but warn about potential issues
+          console.warn('⚠️ Using temporary script ID, auto-save will be skipped:', fullScript.id);
+          databaseUUID = fullScript.id;
+        }
+
+        // NOW update script with proper UUID
+        fullScript.id = databaseUUID; // Use database UUID immediately
+
+        // Set state with proper UUID
         setCurrentScript(fullScript);
         setCurrentScene(null);
         setSelectedChunkId(fullScript.chunks[0]?.id || null);
         setCharacters(normalizedCharacters);
-        
-        // FIXED: Wait for script save to complete before generating feedback
-        // This ensures the script has a proper database ID before auto-save attempts
-        
-        // Generate chunked feedback only after script is fully saved
+
+        // NOW generate feedback with proper UUID - auto-save will work correctly
         if (selectedMentorId && selectedMentorId !== 'blended') {
           const mentor = mentors.find(m => m.id === selectedMentorId);
           if (mentor) {
-            console.log('🎬 Generating feedback for newly uploaded chunked script:', {
-              scriptId: fullScript.id,
+            console.log('🎬 Generating feedback for chunked script with UUID:', {
+              scriptUUID: fullScript.id,
               scriptTitle: fullScript.title,
               mentorId: mentor.id,
               chunkCount: fullScript.chunks.length
@@ -1756,86 +1872,51 @@ const handleShowWriterSuggestions = async () => {
             await handleChunkedFeedback(fullScript, mentor, abortController);
           }
         }
-        
-        // Save the chunked script to Supabase and capture real database ID
-        try {
-          const databaseScriptId = await supabaseScriptService.saveScript(
-            content,
-            title,
-            content, // processedContent
-            normalizedCharacters,
-            feedback,
-            undefined,
-            undefined,
-            fullScript
-          );
-
-          // FIXED: Update script context with real database ID
-          fullScript.id = databaseScriptId; // Update the existing script object
-          setCurrentScript(fullScript);
-
-          console.log('✅ Chunked script saved to Supabase with ID:', databaseScriptId);
-        } catch (error) {
-          console.error('❌ Failed to save chunked script to Supabase:', error);
-          // FIXED: Even if save fails, ensure script is set
-          setCurrentScript(fullScript);
-        }
       } else {
-        // Process as single scene (existing logic)
+        // Process as single scene with FIXED timing - Save to database FIRST
         const processedContent = processSceneText(content);
-        const scriptId = `script_${title.replace(/\s+/g, '_')}_${Date.now()}`;
-        const newScene: ScriptScene = {
-          id: scriptId,
-          title: title || 'Uploaded Scene',
-          content: processedContent,
-          characters: Object.keys(parsedCharacters) || characterManager.extractCharactersFromScene(processedContent)
-        };
-        
-        setCurrentScene(newScene);
-        setCurrentScript(null);
-        setSelectedChunkId(null);
-        
-        // Process characters with normalization
-        // FIXED: Start with a fresh characters object instead of merging with existing
+        const tempScriptId = `script_${title.replace(/\s+/g, '_')}_${Date.now()}`;
+
+        // Process characters with normalization FIRST
         console.log('🔧 Processing characters for single scene upload');
-        
+
         // Start fresh - don't merge with existing characters
         const freshCharacters: Record<string, { name: string, notes: string[] }> = {};
-        
+
         // Process characters from the new script only
-        const extractedCharacters = Object.keys(parsedCharacters).length > 0 
-          ? Object.keys(parsedCharacters) 
+        const extractedCharacters = Object.keys(parsedCharacters).length > 0
+          ? Object.keys(parsedCharacters)
           : characterManager.extractCharactersFromScene(processedContent);
 
         extractedCharacters.forEach(char => {
           if (char && char.trim()) {
             // Check if we have parsed character data
             const parsedCharacterData = parsedCharacters[char];
-            
+
             if (parsedCharacterData && typeof parsedCharacterData === 'object') {
               // Use parsed character data if available
               freshCharacters[char] = {
                 name: char,
-                notes: Array.isArray(parsedCharacterData.notes) 
-                  ? parsedCharacterData.notes 
-                  : parsedCharacterData.notes 
-                  ? [String(parsedCharacterData.notes)]
-                  : [`Character: ${char}`]
+                notes: Array.isArray(parsedCharacterData.notes)
+                  ? parsedCharacterData.notes
+                  : parsedCharacterData.notes
+                    ? [String(parsedCharacterData.notes)]
+                    : [`Character: ${char}`]
               };
-              
+
               // Add additional character details if available
               if (parsedCharacterData.appearances) {
                 freshCharacters[char].notes.push(`Appears in ${parsedCharacterData.appearances} scenes`);
               }
-              
+
               if (parsedCharacterData.dialogueCount) {
                 freshCharacters[char].notes.push(`Has ${parsedCharacterData.dialogueCount} lines of dialogue`);
               }
-              
+
               if (parsedCharacterData.arc_phase) {
                 freshCharacters[char].notes.push(`Arc Phase: ${parsedCharacterData.arc_phase}`);
               }
-              
+
               if (parsedCharacterData.emotional_state) {
                 freshCharacters[char].notes.push(`Emotional State: ${parsedCharacterData.emotional_state}`);
               }
@@ -1848,23 +1929,60 @@ const handleShowWriterSuggestions = async () => {
             }
           }
         });
-        
+
         // Normalize the fresh characters
         const normalizedCharacters = CharacterDataNormalizer.normalizeCharacters(freshCharacters);
         console.log('🔧 Normalized fresh characters for single scene:', normalizedCharacters);
-        
-        // FIXED: Set characters to the fresh normalized characters (no merging with old ones)
-        setCharacters(normalizedCharacters);
-        
-        // FIXED: Wait for script save to complete before generating feedback
-        // This ensures the script has a proper database ID before auto-save attempts
 
-        // Generate single scene feedback only after script is fully saved
+        // FIXED TIMING: Save to database FIRST to get proper UUID
+        console.log('💾 Saving single scene to database first to get UUID...');
+        let databaseUUID: string;
+
+        try {
+          databaseUUID = await supabaseScriptService.saveScript(
+            content,
+            title,
+            processedContent,
+            normalizedCharacters,
+            null // No feedback yet
+          );
+
+          if (!databaseUUID || typeof databaseUUID !== 'string') {
+            throw new Error('Invalid UUID returned from database');
+          }
+
+          console.log('✅ Single scene saved to Supabase with UUID:', {
+            tempId: tempScriptId,
+            databaseUUID: databaseUUID,
+            title: title
+          });
+        } catch (error) {
+          console.error('❌ Failed to save single scene to Supabase:', error);
+          // FALLBACK: Use temporary ID but warn about potential issues
+          console.warn('⚠️ Using temporary script ID, auto-save will be skipped:', tempScriptId);
+          databaseUUID = tempScriptId;
+        }
+
+        // NOW create scene with proper UUID
+        const newScene: ScriptScene = {
+          id: databaseUUID, // Use database UUID immediately
+          title: title || 'Uploaded Scene',
+          content: processedContent,
+          characters: Object.keys(parsedCharacters) || characterManager.extractCharactersFromScene(processedContent)
+        };
+
+        // Set state with proper UUID
+        setCurrentScene(newScene);
+        setCurrentScript(null);
+        setSelectedChunkId(null);
+        setCharacters(normalizedCharacters);
+
+        // NOW generate feedback with proper UUID - auto-save will work correctly
         if (selectedMentorId && selectedMentorId !== 'blended') {
           const mentor = mentors.find(m => m.id === selectedMentorId);
           if (mentor) {
-            console.log('🎬 Generating feedback for newly uploaded scene:', {
-              sceneId: newScene.id,
+            console.log('🎬 Generating feedback for scene with UUID:', {
+              sceneUUID: newScene.id,
               sceneTitle: newScene.title,
               mentorId: mentor.id
             });
@@ -1872,27 +1990,6 @@ const handleShowWriterSuggestions = async () => {
             const abortController = new AbortController();
             await handleSingleSceneFeedback(newScene, mentor, abortController);
           }
-        }
-        
-        // Save single scene to Supabase and capture real database ID
-        try {
-          const savedScriptId = await supabaseScriptService.saveScript(
-            content,
-            title,
-            processedContent,
-            normalizedCharacters,
-            feedback
-          );
-
-          // FIXED: Update scene with real database ID for proper auto-save context
-          newScene.id = savedScriptId; // Update the existing scene object
-          setCurrentScene(newScene);
-
-          console.log('✅ Single scene saved to Supabase with ID:', savedScriptId);
-        } catch (error) {
-          console.error('❌ Failed to save single scene to Supabase:', error);
-          // FIXED: Even if save fails, ensure scene is set
-          setCurrentScene(newScene);
         }
         
         }

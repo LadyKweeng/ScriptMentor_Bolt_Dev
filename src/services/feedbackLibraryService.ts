@@ -35,6 +35,60 @@ export class FeedbackLibraryService {
   }
 
   /**
+ * NEW: Validate and normalize script ID to ensure it's a valid UUID
+ */
+private async validateAndNormalizeScriptId(scriptId: string, userId: string): Promise<string | null> {
+  // Check if it's already a valid UUID format
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  
+  if (uuidRegex.test(scriptId)) {
+    console.log('✅ Script ID is already a valid UUID:', scriptId);
+    return scriptId;
+  }
+  
+  // If it's a string-based ID, try to find the corresponding UUID in the database
+  console.log('🔍 String-based script ID detected, searching for corresponding UUID...', scriptId);
+  
+  try {
+    // Search for script by title if the ID contains the title
+    let searchQuery = '';
+    if (scriptId.startsWith('script_')) {
+      // Extract title from string ID (e.g., "script_WAGMI_032725_1750788051187" -> "WAGMI 032725")
+      const titlePart = scriptId.replace('script_', '').replace(/_/g, ' ').replace(/\d{13}$/, '').trim();
+      searchQuery = titlePart;
+    }
+    
+    if (searchQuery) {
+      const { data: scripts, error } = await supabase
+        .from('scripts')
+        .select('id, title')
+        .eq('user_id', userId)
+        .ilike('title', `%${searchQuery}%`)
+        .order('created_at', { ascending: false })
+        .limit(1);
+      
+      if (!error && scripts && scripts.length > 0) {
+        const foundUUID = scripts[0].id;
+        console.log('✅ Found corresponding UUID for script:', { 
+          originalId: scriptId, 
+          foundUUID, 
+          title: scripts[0].title 
+        });
+        return foundUUID;
+      }
+    }
+    
+    // If no match found, return null to indicate invalid ID
+    console.warn('⚠️ No corresponding UUID found for script ID:', scriptId);
+    return null;
+    
+  } catch (error) {
+    console.error('❌ Error validating script ID:', error);
+    return null;
+  }
+}
+
+  /**
    * Save complete feedback session to library with encryption
    */
   async saveFeedbackSessionToLibrary(
@@ -61,10 +115,12 @@ export class FeedbackLibraryService {
         feedbackType: feedback.isChunked ? 'chunked' : 'single'
       });
 
-      // FIXED: Validate required fields before attempting save
-      if (!scriptId || scriptId.trim() === '') {
-        console.error('❌ Missing script ID for feedback library save:', { scriptId, scriptTitle, mentorIds });
-        throw new Error('Missing or invalid script ID for feedback library save');
+      // ENHANCED: Validate and handle script ID format
+      const validatedScriptId = await this.validateAndNormalizeScriptId(scriptId, userId);
+
+      if (!validatedScriptId) {
+        console.error('❌ Invalid script ID for feedback library save:', { scriptId, scriptTitle, mentorIds });
+        throw new Error('Invalid script ID format - cannot save to feedback library');
       }
 
       if (!scriptTitle || scriptTitle.trim() === '') {
@@ -99,11 +155,11 @@ export class FeedbackLibraryService {
       }
 
       const feedbackData = {
-        script_id: scriptId,
-        title: scriptTitle.substring(0, 255), // FIXED: Ensure title doesn't exceed database limit
+        script_id: validatedScriptId, // FIXED: Use validated UUID instead of raw scriptId
+        title: scriptTitle.substring(0, 255),
         mentor_ids: mentorIds,
-        mentor_names: mentorNames.substring(0, 255), // FIXED: Ensure names don't exceed limit
-        pages: pages.substring(0, 100), // FIXED: Ensure pages don't exceed limit
+        mentor_names: mentorNames.substring(0, 255),
+        pages: pages.substring(0, 100),
         type: 'feedback' as const,
         content: encryptedContent,
         user_id: userId,

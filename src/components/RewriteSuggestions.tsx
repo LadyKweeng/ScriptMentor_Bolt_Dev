@@ -102,15 +102,37 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
         return;
       }
 
-      // ENHANCED: Create comprehensive fallback script context
+      // ENHANCED: Validate script context with UUID checking
       let effectiveScriptId = scriptId;
       let effectiveScriptTitle = scriptTitle;
       let effectivePages = currentPages;
 
-      // FIXED: More robust fallback logic
+      // STEP 1: Validate script ID format
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+      if (effectiveScriptId && !uuidRegex.test(effectiveScriptId)) {
+        console.warn('⚠️ Script ID is not a valid UUID, attempting to find alternative:', effectiveScriptId);
+
+        // Try to find a valid UUID from feedback context
+        const alternativeIds = [
+          feedback.sceneId,
+          feedback.id,
+          originalScene.id
+        ].filter(id => id && uuidRegex.test(id));
+
+        if (alternativeIds.length > 0) {
+          effectiveScriptId = alternativeIds[0];
+          console.log('📝 Found valid UUID alternative:', effectiveScriptId);
+        } else {
+          console.warn('⚠️ No valid UUID found, skipping auto-save to prevent database errors');
+          return; // Skip auto-save if no valid UUID available
+        }
+      }
+
+      // STEP 2: Fallback for missing context
       if (!effectiveScriptId) {
-        effectiveScriptId = feedback.sceneId || feedback.id || originalScene.id || `writer-suggestions-${Date.now()}`;
-        console.log('📝 Using fallback scriptId:', effectiveScriptId);
+        console.warn('⚠️ No script ID available, skipping auto-save');
+        return;
       }
 
       if (!effectiveScriptTitle) {

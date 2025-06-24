@@ -234,14 +234,22 @@ export class SupabaseScriptService {
         throw error;
       }
 
+      // FIXED: Ensure we return the proper UUID from database
+      const databaseUUID = data.id;
       console.log('✅ Script saved to Supabase with encryption:', {
-        id: data.id,
+        id: databaseUUID,
         title: data.title,
         isChunked: data.is_chunked,
-        isEncrypted: data.is_encrypted
+        isEncrypted: data.is_encrypted,
+        uuidType: typeof databaseUUID
       });
 
-      return data.id;
+      // Validate that we got a proper UUID
+      if (!databaseUUID || typeof databaseUUID !== 'string') {
+        throw new Error('Failed to get valid script ID from database');
+      }
+
+      return databaseUUID;
     } catch (error) {
       console.error('❌ Failed to save script to Supabase:', error);
       throw error;
