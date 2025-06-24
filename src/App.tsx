@@ -606,21 +606,52 @@ const handleToggleFeedbackLibrary = useCallback(() => {
 
             console.log('✅ Token-aware progressive chunked feedback complete');
 
-            // AUTO-SAVE: Save complete feedback session to library
+            // AUTO-SAVE: Save complete feedback session to library with robust context validation
             try {
+              // FIXED: Add robust fallback logic similar to Writer Suggestions
+              const effectiveScriptId = script.id ||
+                finalFeedback.sceneId ||
+                finalFeedback.id ||
+                `chunked-script-${Date.now()}`;
+
+              const effectiveScriptTitle = script.title ||
+                'Chunked Script Feedback' ||
+                `Script - ${new Date().toLocaleDateString()}`;
+
+              const effectivePages = script.totalPages
+                ? `Pages 1-${script.totalPages}`
+                : `${script.chunks.length} Sections`;
+
+              console.log('📚 Auto-saving chunked feedback with context:', {
+                originalScriptId: script.id,
+                effectiveScriptId: effectiveScriptId,
+                effectiveScriptTitle: effectiveScriptTitle,
+                mentorId: mentor.id,
+                feedbackId: finalFeedback.id,
+                chunkCount: script.chunks.length,
+                hasOriginalContent: !!script.originalContent
+              });
+
               await feedbackLibraryService.saveFeedbackSessionToLibrary(
-                script.id,
-                script.title,
+                effectiveScriptId,
+                effectiveScriptTitle,
                 [mentor.id],
                 mentor.name,
-                `Pages 1-${script.totalPages || script.chunks.length * 15}`,
+                effectivePages,
                 finalFeedback,
                 script.originalContent
               );
               console.log('✅ Feedback session auto-saved to library');
             } catch (error) {
               console.warn('⚠️ Failed to auto-save feedback session:', error);
-              // Don't block the user experience for save failures
+              console.warn('Auto-save context details:', {
+                originalScriptId: script.id,
+                scriptTitle: script.title,
+                feedbackId: finalFeedback?.id,
+                mentorId: mentor.id,
+                hasOriginalContent: !!script.originalContent,
+                error: error instanceof Error ? error.message : 'Unknown error'
+              });
             }
 
             // Start writer suggestions in background (with cancellation support)
@@ -830,11 +861,30 @@ if (session?.user) {
       
       console.log('✅ Token-aware progressive single scene feedback complete');
 
-      // AUTO-SAVE: Save complete feedback session to library
+      // AUTO-SAVE: Save complete feedback session to library with robust context validation
       try {
+        // FIXED: Add robust fallback logic similar to Writer Suggestions
+        const effectiveScriptId = scene.id ||
+          result.feedback.sceneId ||
+          result.feedback.id ||
+          `single-scene-${Date.now()}`;
+
+        const effectiveScriptTitle = scene.title ||
+          'Single Scene Feedback' ||
+          `Scene - ${new Date().toLocaleDateString()}`;
+
+        console.log('📚 Auto-saving single scene feedback with context:', {
+          originalSceneId: scene.id,
+          effectiveScriptId: effectiveScriptId,
+          effectiveScriptTitle: effectiveScriptTitle,
+          mentorId: mentor.id,
+          feedbackId: result.feedback.id,
+          hasSceneContent: !!scene.content
+        });
+
         await feedbackLibraryService.saveFeedbackSessionToLibrary(
-          scene.id,
-          scene.title,
+          effectiveScriptId,
+          effectiveScriptTitle,
           [mentor.id],
           mentor.name,
           'Single Scene',
@@ -844,7 +894,13 @@ if (session?.user) {
         console.log('✅ Single scene feedback auto-saved to library');
       } catch (error) {
         console.warn('⚠️ Failed to auto-save single scene feedback:', error);
-        // Don't block the user experience for save failures
+        console.warn('Auto-save context details:', {
+          sceneId: scene.id,
+          sceneTitle: scene.title,
+          feedbackId: result.feedback?.id,
+          mentorId: mentor.id,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
       }
 
       // Start writer suggestions in background
@@ -1682,18 +1738,28 @@ const handleShowWriterSuggestions = async () => {
         setSelectedChunkId(fullScript.chunks[0]?.id || null);
         setCharacters(normalizedCharacters);
         
-        // Generate chunked feedback if mentor is selected
+        // FIXED: Wait for script save to complete before generating feedback
+        // This ensures the script has a proper database ID before auto-save attempts
+        
+        // Generate chunked feedback only after script is fully saved
         if (selectedMentorId && selectedMentorId !== 'blended') {
           const mentor = mentors.find(m => m.id === selectedMentorId);
           if (mentor) {
+            console.log('🎬 Generating feedback for newly uploaded chunked script:', {
+              scriptId: fullScript.id,
+              scriptTitle: fullScript.title,
+              mentorId: mentor.id,
+              chunkCount: fullScript.chunks.length
+            });
+
             const abortController = new AbortController();
             await handleChunkedFeedback(fullScript, mentor, abortController);
           }
         }
         
-        // Save the chunked script to Supabase
+        // Save the chunked script to Supabase and capture real database ID
         try {
-          await supabaseScriptService.saveScript(
+          const databaseScriptId = await supabaseScriptService.saveScript(
             content,
             title,
             content, // processedContent
@@ -1703,9 +1769,16 @@ const handleShowWriterSuggestions = async () => {
             undefined,
             fullScript
           );
-          console.log('✅ Chunked script saved to Supabase');
+
+          // FIXED: Update script context with real database ID
+          fullScript.id = databaseScriptId; // Update the existing script object
+          setCurrentScript(fullScript);
+
+          console.log('✅ Chunked script saved to Supabase with ID:', databaseScriptId);
         } catch (error) {
           console.error('❌ Failed to save chunked script to Supabase:', error);
+          // FIXED: Even if save fails, ensure script is set
+          setCurrentScript(fullScript);
         }
       } else {
         // Process as single scene (existing logic)
@@ -1783,29 +1856,46 @@ const handleShowWriterSuggestions = async () => {
         // FIXED: Set characters to the fresh normalized characters (no merging with old ones)
         setCharacters(normalizedCharacters);
         
-        // Generate single scene feedback
+        // FIXED: Wait for script save to complete before generating feedback
+        // This ensures the script has a proper database ID before auto-save attempts
+
+        // Generate single scene feedback only after script is fully saved
         if (selectedMentorId && selectedMentorId !== 'blended') {
           const mentor = mentors.find(m => m.id === selectedMentorId);
           if (mentor) {
+            console.log('🎬 Generating feedback for newly uploaded scene:', {
+              sceneId: newScene.id,
+              sceneTitle: newScene.title,
+              mentorId: mentor.id
+            });
+
             const abortController = new AbortController();
             await handleSingleSceneFeedback(newScene, mentor, abortController);
           }
         }
         
-        // Save single scene to Supabase
+        // Save single scene to Supabase and capture real database ID
         try {
-          await supabaseScriptService.saveScript(
+          const savedScriptId = await supabaseScriptService.saveScript(
             content,
             title,
             processedContent,
             normalizedCharacters,
             feedback
           );
-          console.log('✅ Single scene saved to Supabase');
+
+          // FIXED: Update scene with real database ID for proper auto-save context
+          newScene.id = savedScriptId; // Update the existing scene object
+          setCurrentScene(newScene);
+
+          console.log('✅ Single scene saved to Supabase with ID:', savedScriptId);
         } catch (error) {
           console.error('❌ Failed to save single scene to Supabase:', error);
+          // FIXED: Even if save fails, ensure scene is set
+          setCurrentScene(newScene);
         }
-      }
+        
+        }
       
       setWriterSuggestionsReady(false);
       setShowWriterSuggestions(false);
@@ -2020,30 +2110,147 @@ const handleShowWriterSuggestions = async () => {
     try {
       console.log('📚 Loading complete feedback session from library:', item.id);
       const decryptedItem = await feedbackLibraryService.getFeedbackLibraryItem(item.id);
-      
+
       // Check if this is a complete session or legacy feedback
       if (decryptedItem.content.sessionType === 'complete_feedback') {
         // Load complete feedback session
         const session = decryptedItem.content;
         const restoredFeedback = session.feedback;
-        
+
         // NEW: Restore overview content if available
         if (session.overviewContent) {
           (restoredFeedback as any).overviewContent = session.overviewContent;
         }
-        
+
         setFeedback(restoredFeedback);
         setSelectedMentorId(restoredFeedback.mentorId || 'blended');
-        
-        // Restore script context if available
-        if (session.scriptContent && !currentScript && !currentScene) {
-          console.log('📄 Restoring script context from session');
-          // Could restore script context here if needed
+
+        // ENHANCED: Restore script context from library item metadata
+        console.log('📄 Restoring script context from library item');
+
+        // Create synthetic script context from library item
+        const syntheticScriptId = item.script_id || `loaded-script-${item.id}`;
+        const syntheticScriptTitle = item.title || 'Loaded Script';
+        const syntheticPages = item.pages || 'Unknown Pages';
+
+        // ENHANCED: Check if this is chunked feedback and restore with real content
+        if (restoredFeedback.isChunked || (restoredFeedback as any).chunks) {
+          // Create a restored full script for chunked feedback
+          const chunks = (restoredFeedback as any).chunks || [];
+          const savedScriptContent = session.scriptContent || 'No script content saved with this feedback.';
+
+          console.log('📄 Restoring chunked script with actual content:', {
+            chunkCount: chunks.length,
+            hasScriptContent: !!session.scriptContent,
+            contentLength: savedScriptContent.length
+          });
+
+          const restoredScript: FullScript = {
+            id: syntheticScriptId,
+            title: syntheticScriptTitle,
+            originalContent: savedScriptContent,
+            processedContent: savedScriptContent,
+            chunks: chunks.map((chunk: any, index: number) => {
+              // ENHANCED: Try to extract actual chunk content from saved script
+              let chunkContent = '';
+              if (savedScriptContent && chunk.chunkTitle) {
+                // Try to find the chunk content in the saved script
+                const chunkStart = savedScriptContent.indexOf(chunk.chunkTitle);
+                if (chunkStart !== -1) {
+                  // Extract content for this chunk (simplified approach)
+                  const nextChunkIndex = index + 1;
+                  const nextChunk = chunks[nextChunkIndex];
+                  if (nextChunk) {
+                    const nextChunkStart = savedScriptContent.indexOf(nextChunk.chunkTitle, chunkStart + 1);
+                    chunkContent = savedScriptContent.substring(chunkStart, nextChunkStart).trim();
+                  } else {
+                    // Last chunk - take rest of content
+                    chunkContent = savedScriptContent.substring(chunkStart).trim();
+                  }
+                }
+              }
+
+              // Fallback to a portion of the script if chunk-specific extraction fails
+              if (!chunkContent && savedScriptContent) {
+                const chunkSize = Math.ceil(savedScriptContent.length / chunks.length);
+                const startPos = index * chunkSize;
+                const endPos = Math.min((index + 1) * chunkSize, savedScriptContent.length);
+                chunkContent = savedScriptContent.substring(startPos, endPos).trim();
+              }
+
+              return {
+                id: chunk.chunkId || `chunk-${index}`,
+                title: chunk.chunkTitle || `Section ${index + 1}`,
+                content: chunkContent || `Section ${index + 1} content`,
+                characters: chunk.characters || [],
+                chunkType: 'section' as const,
+                startPage: chunk.startPage || (index * 15) + 1,
+                endPage: chunk.endPage || ((index + 1) * 15)
+              };
+            }),
+            characters: characters,
+            totalPages: parseInt(syntheticPages.replace(/\D/g, '')) || chunks.length * 15,
+            chunkingStrategy: 'pages' as const
+          };
+
+          setCurrentScript(restoredScript);
+          setCurrentScene(null);
+          setSelectedChunkId(chunks[0]?.chunkId || null);
+
+          console.log('✅ Chunked script restored successfully');
+        } else {
+          // ENHANCED: Create a restored scene for single feedback with real content
+          const savedScriptContent = session.scriptContent || 'No script content saved with this feedback.';
+
+          console.log('📄 Restoring single scene with actual content:', {
+            hasScriptContent: !!session.scriptContent,
+            contentLength: savedScriptContent.length
+          });
+
+          const restoredScene: ScriptScene = {
+            id: syntheticScriptId,
+            title: syntheticScriptTitle,
+            content: savedScriptContent,
+            characters: Object.keys(characters)
+          };
+
+          setCurrentScene(restoredScene);
+          setCurrentScript(null);
+          setSelectedChunkId(null);
+
+          console.log('✅ Single scene restored successfully');
         }
       } else {
         // Handle legacy feedback format
         setFeedback(decryptedItem.content);
         setSelectedMentorId(decryptedItem.content.mentorId || 'blended');
+
+        // ENHANCED: Create script context for legacy feedback with better fallback
+        const legacyScriptId = item.script_id || `legacy-script-${item.id}`;
+        const legacyScriptTitle = item.title || 'Legacy Script';
+
+        // FIXED: Try to find any saved content or create meaningful placeholder
+        let legacyContent = 'Legacy script content - original content not available.';
+
+        // Check if there's any content in the feedback itself that might give us script info
+        if (decryptedItem.content.structuredContent) {
+          legacyContent = `Script content not saved with this feedback session.\n\nFeedback was provided for: ${legacyScriptTitle}\n\nTo generate new writer suggestions, you can edit this area with your actual script content.`;
+        } else if (decryptedItem.content.scratchpadContent) {
+          legacyContent = `Script content not saved with this feedback session.\n\nFeedback was provided for: ${legacyScriptTitle}\n\nTo generate new writer suggestions, you can edit this area with your actual script content.`;
+        }
+
+        const legacyScene: ScriptScene = {
+          id: legacyScriptId,
+          title: legacyScriptTitle,
+          content: legacyContent,
+          characters: Object.keys(characters)
+        };
+
+        setCurrentScene(legacyScene);
+        setCurrentScript(null);
+        setSelectedChunkId(null);
+
+        console.log('✅ Legacy feedback restored with placeholder content');
       }
       
       // NEW: Close both libraries and ensure we're in main view

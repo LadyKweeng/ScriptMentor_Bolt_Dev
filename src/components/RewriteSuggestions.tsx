@@ -1,11 +1,11 @@
 // src/components/RewriteSuggestions.tsx - COMPLETE FIXED version preserving ALL current features + robust error handling
 import React, { useState, useEffect } from 'react';
 import { Feedback, Mentor, ScriptScene, ScriptChunk } from '../types';
-import { 
-  X, 
-  Lightbulb, 
-  Sparkles, 
-  ClipboardCopy, 
+import {
+  X,
+  Lightbulb,
+  Sparkles,
+  ClipboardCopy,
   RefreshCw,
   CheckCircle,
   AlertCircle,
@@ -59,7 +59,11 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
   mentor,
   selectedChunkId,
   onClose,
-  userId
+  userId,
+  // FIXED: Extract all script context props
+  scriptId,
+  scriptTitle,
+  currentPages
 }) => {
   const [suggestions, setSuggestions] = useState<WriterSuggestion[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -90,51 +94,126 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
   const isChunked = feedback.isChunked && (feedback.chunkedFeedback || (feedback as any).chunks);
   const sceneType = 'chunkType' in originalScene ? 'chunk' : 'scene';
 
-  // NEW: Auto-save writer suggestions to library
+  // ENHANCED: Auto-save writer suggestions to library with comprehensive fallback context
   const autoSaveWriterSuggestions = async (suggestions: WriterSuggestion[]) => {
     try {
-      if (!scriptId || !scriptTitle || !mentor || !userId) {
-        console.log('📝 Skipping auto-save: missing script context, mentor, or userId');
+      if (!mentor || !userId) {
+        console.log('📝 Skipping auto-save: missing mentor or userId');
         return;
+      }
+
+      // ENHANCED: Create comprehensive fallback script context
+      let effectiveScriptId = scriptId;
+      let effectiveScriptTitle = scriptTitle;
+      let effectivePages = currentPages;
+
+      // FIXED: More robust fallback logic
+      if (!effectiveScriptId) {
+        effectiveScriptId = feedback.sceneId || feedback.id || originalScene.id || `writer-suggestions-${Date.now()}`;
+        console.log('📝 Using fallback scriptId:', effectiveScriptId);
+      }
+
+      if (!effectiveScriptTitle) {
+        effectiveScriptTitle = originalScene.title ||
+          (feedback as any).scriptTitle ||
+          `Writer Suggestions - ${new Date().toLocaleDateString()}`;
+        console.log('📝 Using fallback scriptTitle:', effectiveScriptTitle);
+      }
+
+      if (!effectivePages) {
+        if (selectedChunkId && sceneType === 'chunk') {
+          effectivePages = getChunkDisplayInfo();
+        } else {
+          effectivePages = 'Generated from Loaded Feedback';
+        }
+        console.log('📝 Using fallback pages:', effectivePages);
       }
 
       const mentorIds = mentor.id === 'blended' ? ['blended'] : [mentor.id];
       const mentorNames = mentor.name;
-      const pages = currentPages || 'Unknown Pages';
 
-      // Create writer suggestions response format
-      const writerSuggestionsResponse = {
+      // ENHANCED: Create complete writer suggestions session format with proper structure
+      const writerSuggestionsSession = {
+        // Core suggestions data
         suggestions: suggestions.map(s => ({
           note: s.title,
-          suggestion: s.description
+          suggestion: s.description,
+          reasoning: s.reasoning || '',
+          type: s.type,
+          priority: s.priority
         })),
         success: true,
         mentor_id: mentor.id,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+
+        // NEW: Session metadata for proper restoration
+        sessionType: 'writer_suggestions',
+        originalFeedback: {
+          ...feedback,
+          // Ensure we preserve key feedback properties
+          id: feedback.id,
+          mentorId: feedback.mentorId,
+          sceneId: feedback.sceneId,
+          timestamp: feedback.timestamp
+        },
+
+        // NEW: Enhanced script context
+        scriptContext: {
+          scriptId: effectiveScriptId,
+          scriptTitle: effectiveScriptTitle,
+          pages: effectivePages,
+          sceneType: sceneType,
+          selectedChunkId: selectedChunkId,
+          originalSceneId: originalScene.id,
+          originalSceneTitle: originalScene.title,
+          isChunked: isChunked,
+          mentorInfo: {
+            id: mentor.id,
+            name: mentor.name,
+            isBlended: mentor.id === 'blended'
+          }
+        },
+        version: '1.1'
       };
 
+      console.log('💾 Preparing to save writer suggestions session:', {
+        sessionType: writerSuggestionsSession.sessionType,
+        mentorId: mentor.id,
+        suggestionCount: suggestions.length,
+        scriptContext: writerSuggestionsSession.scriptContext
+      });
+
       await feedbackLibraryService.saveWriterSuggestionsToLibrary(
-        scriptId,
-        scriptTitle,
+        effectiveScriptId,
+        effectiveScriptTitle,
         mentorIds,
         mentorNames,
-        pages,
-        writerSuggestionsResponse,
+        effectivePages,
+        writerSuggestionsSession,
         feedback
       );
 
-      console.log('✅ Writer suggestions auto-saved to library');
+      console.log('✅ Writer suggestions auto-saved to library with enhanced session data');
     } catch (error) {
       console.warn('⚠️ Failed to auto-save writer suggestions:', error);
       // Don't block the user experience for save failures
     }
   };
 
-  // PRESERVED: Extract chunk feedback for chunked scripts
+  // ENHANCED: Extract chunk feedback for chunked scripts with better fallback handling
   useEffect(() => {
     if (!mentor) return; // Skip if no mentor
 
     const extractChunkFeedback = () => {
+      console.log('🔍 Extracting feedback for writer suggestions:', {
+        isChunked,
+        selectedChunkId,
+        hasStructured: !!feedback.structuredContent,
+        hasScratchpad: !!feedback.scratchpadContent,
+        hasLegacyContent: !!(feedback as any).content,
+        mentorId: mentor.id
+      });
+
       if (isChunked && selectedChunkId) {
         // Find feedback for the selected chunk - handle both structure formats
         const chunkedFeedback = feedback.chunkedFeedback || { chunks: (feedback as any).chunks };
@@ -142,7 +221,7 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
           const chunkFeedback = chunkedFeedback.chunks.find(
             chunk => chunk.chunkId === selectedChunkId
           );
-          
+
           if (chunkFeedback) {
             // Convert chunk feedback to Feedback format
             const convertedFeedback: Feedback = {
@@ -151,7 +230,7 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
               sceneId: selectedChunkId,
               structuredContent: chunkFeedback.structuredContent,
               scratchpadContent: chunkFeedback.scratchpadContent,
-              content: chunkFeedback.structuredContent,
+              content: chunkFeedback.structuredContent || chunkFeedback.scratchpadContent,
               timestamp: feedback.timestamp,
               categories: feedback.categories || {}
             };
@@ -160,13 +239,7 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
             console.log('✅ Using chunk feedback for writer suggestions');
           } else {
             const errorMsg = `No feedback found for chunk ${selectedChunkId}`;
-            console.warn('⚠️ ' + errorMsg, {
-              availableChunks: chunkedFeedback.chunks?.map(c => c.chunkId) || [],
-              requestedChunk: selectedChunkId,
-              hasSelectedChunkId: !!selectedChunkId,
-              hasChunksArray: !!(chunkedFeedback.chunks && Array.isArray(chunkedFeedback.chunks)),
-              feedbackStructure: feedback.chunkedFeedback ? 'legacy' : 'direct_chunks'
-            });
+            console.warn('⚠️ ' + errorMsg);
             setError(errorMsg);
             setCurrentChunkFeedback(null);
           }
@@ -175,30 +248,58 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
           setCurrentChunkFeedback(null);
         }
       } else {
-        // Single scene feedback - enhanced validation
-        if (feedback.structuredContent || feedback.scratchpadContent || (feedback as any).content) {
-          setCurrentChunkFeedback(feedback);
+        // ENHANCED: Single scene feedback with improved validation and fallback
+        const hasValidContent = feedback.structuredContent ||
+          feedback.scratchpadContent ||
+          (feedback as any).content;
+
+        if (hasValidContent) {
+          // ENHANCED: Ensure we have content field for compatibility
+          const enhancedFeedback = {
+            ...feedback,
+            content: feedback.structuredContent ||
+              feedback.scratchpadContent ||
+              (feedback as any).content
+          };
+
+          setCurrentChunkFeedback(enhancedFeedback);
           setError(null);
-          console.log('✅ Using single scene feedback');
+          console.log('✅ Using enhanced single scene feedback for writer suggestions');
         } else {
-          setError('No valid feedback content found.');
-          setCurrentChunkFeedback(null);
-          console.warn('⚠️ No valid feedback content in single scene');
+          // ENHANCED: Create minimal fallback feedback if truly no content exists
+          console.warn('⚠️ No valid feedback content found, creating minimal fallback');
+          const fallbackFeedback: Feedback = {
+            id: feedback.id || `fallback-${Date.now()}`,
+            mentorId: feedback.mentorId || mentor.id,
+            sceneId: feedback.sceneId || originalScene.id,
+            structuredContent: `General feedback from ${mentor.name} for scene analysis.`,
+            timestamp: feedback.timestamp || new Date(),
+            categories: feedback.categories || {}
+          };
+
+          setCurrentChunkFeedback(fallbackFeedback);
+          setError(null);
+          console.log('✅ Using fallback feedback for writer suggestions');
         }
       }
     };
 
     extractChunkFeedback();
-  }, [feedback, selectedChunkId, isChunked, mentor]);
+  }, [feedback, selectedChunkId, isChunked, mentor, originalScene.id]);
 
-  // Generate suggestions when we have valid data
+  // ENHANCED: Generate suggestions when we have valid data, regardless of source
   useEffect(() => {
     if (currentChunkFeedback && mentor) {
       generateWriterSuggestions();
+    } else if (feedback && mentor && !isChunked) {
+      // ENHANCED: Handle direct feedback without chunk processing
+      console.log('📝 Using direct feedback for writer suggestions (non-chunked)');
+      setCurrentChunkFeedback(feedback);
+      setError(null);
     } else {
       setIsLoading(false);
     }
-  }, [currentChunkFeedback, mentor, originalScene.id]);
+  }, [currentChunkFeedback, feedback, mentor, originalScene.id, isChunked]);
 
   const generateWriterSuggestions = async () => {
     // FIXED: Always validate mentor exists
@@ -261,7 +362,7 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
       } else {
         // Use legacy API for backward compatibility
         response = await writerAgentService.generateWriterSuggestionsLegacy(
-          currentChunkFeedback, 
+          currentChunkFeedback,
           mentor
         );
       }
@@ -272,7 +373,7 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
 
       // AUTO-SAVE: Save writer suggestions to library
       autoSaveWriterSuggestions(processedSuggestions);
-      
+
       console.log('✅ Enhanced Writer suggestions loaded:', {
         suggestionsCount: processedSuggestions.length,
         mentor: mentor.name,
@@ -282,9 +383,9 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
 
     } catch (err) {
       console.error('❌ Failed to generate writer suggestions:', err);
-      
+
       let errorMessage = 'Failed to generate writer suggestions. Please try again.';
-      
+
       if (err instanceof Error) {
         if (err.message.includes('token')) {
           errorMessage = 'Insufficient tokens for writer suggestions. Please check your token balance.';
@@ -296,7 +397,7 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
           errorMessage = 'Feedback content is insufficient for generating suggestions.';
         }
       }
-      
+
       setError(errorMessage);
     } finally {
       setIsLoading(false);
@@ -306,71 +407,71 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
   // NEW: Process API response to handle both simple and complex formats
   const processApiResponse = async (response: any, feedbackText: string): Promise<WriterSuggestion[]> => {
     const suggestions = response.suggestions || [];
-    
+
     // If we get simple format suggestions, convert them to complex format
     if (suggestions.length > 0 && suggestions[0].note && suggestions[0].suggestion) {
       return convertSimpleToComplexSuggestions(suggestions as SimpleWriterSuggestion[], feedbackText);
     }
-    
+
     // If we already have complex format, return as-is
     if (suggestions.length > 0 && suggestions[0].id && suggestions[0].type) {
       return suggestions as WriterSuggestion[];
     }
-    
+
     // If no suggestions or unknown format, return empty array
     return [];
   };
 
   // NEW: Convert simple suggestions to complex format for UI compatibility
-const convertSimpleToComplexSuggestions = (simpleSuggestions: SimpleWriterSuggestion[], feedbackText: string): WriterSuggestion[] => {
-  return simpleSuggestions.map((simple, index) => {
-    // Determine type based on content
-    let type: WriterSuggestion['type'] = 'structure';
-    if (simple.note.toLowerCase().includes('dialogue') || simple.suggestion.toLowerCase().includes('dialogue')) {
-      type = 'dialogue';
-    } else if (simple.note.toLowerCase().includes('action') || simple.suggestion.toLowerCase().includes('action')) {
-      type = 'action';
-    } else if (simple.note.toLowerCase().includes('character') || simple.suggestion.toLowerCase().includes('character')) {
-      type = 'character';
-    } else if (simple.note.toLowerCase().includes('pacing') || simple.suggestion.toLowerCase().includes('pacing')) {
-      type = 'pacing';
-    }
+  const convertSimpleToComplexSuggestions = (simpleSuggestions: SimpleWriterSuggestion[], feedbackText: string): WriterSuggestion[] => {
+    return simpleSuggestions.map((simple, index) => {
+      // Determine type based on content
+      let type: WriterSuggestion['type'] = 'structure';
+      if (simple.note.toLowerCase().includes('dialogue') || simple.suggestion.toLowerCase().includes('dialogue')) {
+        type = 'dialogue';
+      } else if (simple.note.toLowerCase().includes('action') || simple.suggestion.toLowerCase().includes('action')) {
+        type = 'action';
+      } else if (simple.note.toLowerCase().includes('character') || simple.suggestion.toLowerCase().includes('character')) {
+        type = 'character';
+      } else if (simple.note.toLowerCase().includes('pacing') || simple.suggestion.toLowerCase().includes('pacing')) {
+        type = 'pacing';
+      }
 
-    // Determine priority based on language
-    let priority: WriterSuggestion['priority'] = 'medium';
-    if (simple.suggestion.toLowerCase().includes('critical') || simple.suggestion.toLowerCase().includes('important')) {
-      priority = 'high';
-    } else if (simple.suggestion.toLowerCase().includes('minor') || simple.suggestion.toLowerCase().includes('consider')) {
-      priority = 'low';
-    }
+      // Determine priority based on language
+      let priority: WriterSuggestion['priority'] = 'medium';
+      if (simple.suggestion.toLowerCase().includes('critical') || simple.suggestion.toLowerCase().includes('important')) {
+        priority = 'high';
+      } else if (simple.suggestion.toLowerCase().includes('minor') || simple.suggestion.toLowerCase().includes('consider')) {
+        priority = 'low';
+      }
 
-    // Generate clean, focused reasoning without repetitive boilerplate
-    const reasoning = generateCleanReasoning(simple, type);
+      // Generate clean, focused reasoning without repetitive boilerplate
+      const reasoning = generateCleanReasoning(simple, type);
 
-    return {
-      id: `suggestion-${index + 1}`,
-      type: type,
-      title: simple.note || `Writer Suggestion ${index + 1}`,
-      description: simple.suggestion,
-      reasoning: reasoning,
-      priority: priority,
-      lineReference: `Based on feedback analysis`
-    };
-  });
-};
-
-// NEW: Generate clean reasoning without boilerplate text
-const generateCleanReasoning = (suggestion: SimpleWriterSuggestion, type: WriterSuggestion['type']): string => {
-  const reasoningTemplates = {
-    dialogue: 'This improves conversation flow and makes characters sound more natural while advancing the story.',
-    action: 'This creates clearer visual storytelling that engages viewers and supports character development.',
-    character: 'This strengthens character motivation and makes their choices more psychologically compelling.',
-    pacing: 'This optimizes story rhythm to maintain audience engagement throughout the scene.',
-    structure: 'This tightens the scene foundation and ensures every element serves the dramatic purpose.'
+      return {
+        id: `suggestion-${index + 1}`,
+        type: type,
+        title: simple.note || `Writer Suggestion ${index + 1}`,
+        description: simple.suggestion,
+        reasoning: reasoning,
+        priority: priority,
+        lineReference: `Based on feedback analysis`
+      };
+    });
   };
 
-  return reasoningTemplates[type] || reasoningTemplates.structure;
-};
+  // NEW: Generate clean reasoning without boilerplate text
+  const generateCleanReasoning = (suggestion: SimpleWriterSuggestion, type: WriterSuggestion['type']): string => {
+    const reasoningTemplates = {
+      dialogue: 'This improves conversation flow and makes characters sound more natural while advancing the story.',
+      action: 'This creates clearer visual storytelling that engages viewers and supports character development.',
+      character: 'This strengthens character motivation and makes their choices more psychologically compelling.',
+      pacing: 'This optimizes story rhythm to maintain audience engagement throughout the scene.',
+      structure: 'This tightens the scene foundation and ensures every element serves the dramatic purpose.'
+    };
+
+    return reasoningTemplates[type] || reasoningTemplates.structure;
+  };
 
   const getFeedbackText = (feedbackObj: Feedback): string => {
     // Try multiple sources for feedback content
@@ -452,8 +553,8 @@ const generateCleanReasoning = (suggestion: SimpleWriterSuggestion, type: Writer
     }
   };
 
-  const filteredSuggestions = selectedType === 'all' 
-    ? suggestions 
+  const filteredSuggestions = selectedType === 'all'
+    ? suggestions
     : suggestions.filter(s => s.type === selectedType);
 
   const suggestionTypes = [...new Set(suggestions.map(s => s.type))];
@@ -480,7 +581,7 @@ const generateCleanReasoning = (suggestion: SimpleWriterSuggestion, type: Writer
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <div className="bg-slate-800 rounded-xl w-full max-w-4xl max-h-[90vh] flex flex-col border border-slate-700 shadow-2xl">
         {/* PRESERVED: Enhanced Header with mentor validation */}
-        <div 
+        <div
           className="p-4 sm:p-6 bg-slate-900 border-b border-slate-700 flex items-center justify-between flex-shrink-0"
           style={{ borderBottom: `2px solid ${mentorAccent}` }}
         >
@@ -580,27 +681,25 @@ const generateCleanReasoning = (suggestion: SimpleWriterSuggestion, type: Writer
               <div className="flex border-b border-slate-700 bg-slate-800/50 overflow-x-auto">
                 <button
                   onClick={() => setSelectedType('all')}
-                  className={`px-4 py-3 text-sm font-medium transition-colors flex items-center gap-2 whitespace-nowrap ${
-                    selectedType === 'all'
-                      ? 'text-white border-b-2'
-                      : 'text-slate-400 hover:text-white'
-                  }`}
+                  className={`px-4 py-3 text-sm font-medium transition-colors flex items-center gap-2 whitespace-nowrap ${selectedType === 'all'
+                    ? 'text-white border-b-2'
+                    : 'text-slate-400 hover:text-white'
+                    }`}
                   style={{ borderBottomColor: selectedType === 'all' ? mentorAccent : 'transparent' }}
                   type="button"
                 >
                   <Target className="h-4 w-4" />
                   All ({suggestions.length})
                 </button>
-                
+
                 {suggestionTypes.map(type => (
                   <button
                     key={type}
                     onClick={() => setSelectedType(type)}
-                    className={`px-4 py-3 text-sm font-medium transition-colors flex items-center gap-2 whitespace-nowrap capitalize ${
-                      selectedType === type
-                        ? 'text-white border-b-2'
-                        : 'text-slate-400 hover:text-white'
-                    }`}
+                    className={`px-4 py-3 text-sm font-medium transition-colors flex items-center gap-2 whitespace-nowrap capitalize ${selectedType === type
+                      ? 'text-white border-b-2'
+                      : 'text-slate-400 hover:text-white'
+                      }`}
                     style={{ borderBottomColor: selectedType === type ? mentorAccent : 'transparent' }}
                     type="button"
                   >
@@ -631,7 +730,7 @@ const generateCleanReasoning = (suggestion: SimpleWriterSuggestion, type: Writer
                             </p>
                           </div>
                         </div>
-                        
+
                         <button
                           onClick={() => copyToClipboard(suggestion.suggestedText || suggestion.description, index)}
                           className="p-2 hover:bg-slate-600 rounded-md transition-colors text-slate-400 hover:text-white"
@@ -655,7 +754,7 @@ const generateCleanReasoning = (suggestion: SimpleWriterSuggestion, type: Writer
                               <p className="text-slate-300 text-sm">{suggestion.originalText}</p>
                             </div>
                           </div>
-                          
+
                           <div>
                             <p className="text-xs font-medium text-green-400 mb-1">SUGGESTED:</p>
                             <div className="bg-green-900/20 p-3 rounded border border-green-500/30">
@@ -669,7 +768,7 @@ const generateCleanReasoning = (suggestion: SimpleWriterSuggestion, type: Writer
                       <div className="border-t border-slate-600/30 pt-3">
                         <p className="text-xs font-medium text-slate-400 mb-1">REASONING:</p>
                         <p className="text-slate-300 text-sm">{suggestion.reasoning}</p>
-                        
+
                         {suggestion.lineReference && (
                           <p className="text-xs text-slate-500 mt-2">
                             Reference: {suggestion.lineReference}

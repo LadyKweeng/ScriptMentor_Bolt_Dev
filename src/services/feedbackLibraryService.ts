@@ -50,12 +50,32 @@ export class FeedbackLibraryService {
       const userId = await this.getAuthenticatedUserId();
 
       console.log('💾 Saving feedback to library with encryption...', {
+        scriptId,
         scriptTitle,
+        mentorIds,
         mentorNames,
         pages,
-        feedbackId: feedback.id
+        feedbackId: feedback.id,
+        userId: userId.substring(0, 8) + '...',
+        hasScriptContent: !!scriptContent,
+        feedbackType: feedback.isChunked ? 'chunked' : 'single'
       });
 
+      // FIXED: Validate required fields before attempting save
+      if (!scriptId || scriptId.trim() === '') {
+        console.error('❌ Missing script ID for feedback library save:', { scriptId, scriptTitle, mentorIds });
+        throw new Error('Missing or invalid script ID for feedback library save');
+      }
+
+      if (!scriptTitle || scriptTitle.trim() === '') {
+        console.error('❌ Missing script title for feedback library save:', { scriptId, scriptTitle, mentorIds });
+        throw new Error('Missing or invalid script title for feedback library save');
+      }
+
+      if (!mentorIds || mentorIds.length === 0) {
+        console.error('❌ Missing mentor IDs for feedback library save:', { scriptId, scriptTitle, mentorIds });
+        throw new Error('Missing mentor IDs for feedback library save');
+      }
       // Create complete feedback session object
       const feedbackSession = {
         feedback: feedback,
@@ -73,12 +93,17 @@ export class FeedbackLibraryService {
         userId
       );
 
+      // FIXED: Validate required fields before insertion
+      if (!scriptId || !scriptTitle || !mentorIds.length) {
+        throw new Error('Missing required fields for feedback library save');
+      }
+
       const feedbackData = {
         script_id: scriptId,
-        title: scriptTitle,
+        title: scriptTitle.substring(0, 255), // FIXED: Ensure title doesn't exceed database limit
         mentor_ids: mentorIds,
-        mentor_names: mentorNames,
-        pages,
+        mentor_names: mentorNames.substring(0, 255), // FIXED: Ensure names don't exceed limit
+        pages: pages.substring(0, 100), // FIXED: Ensure pages don't exceed limit
         type: 'feedback' as const,
         content: encryptedContent,
         user_id: userId,
@@ -94,7 +119,14 @@ export class FeedbackLibraryService {
 
       if (error) {
         console.error('Supabase insert error:', error);
-        throw error;
+        // FIXED: Provide more helpful error context
+        console.error('Failed insertion data:', {
+          script_id: feedbackData.script_id,
+          title: feedbackData.title,
+          mentor_ids: feedbackData.mentor_ids,
+          user_id: feedbackData.user_id
+        });
+        throw new Error(`Database insertion failed: ${error.message}`);
       }
 
       console.log('✅ Feedback saved to library:', data.id);
@@ -106,34 +138,69 @@ export class FeedbackLibraryService {
   }
 
   /**
-   * Save writer suggestions to library with encryption
-   */
+ * Save writer suggestions to library with encryption
+ */
   async saveWriterSuggestionsToLibrary(
     scriptId: string,
     scriptTitle: string,
     mentorIds: string[],
     mentorNames: string,
     pages: string,
-    suggestions: WriterSuggestionsResponse
+    suggestions: WriterSuggestionsResponse | any,
+    originalFeedback?: Feedback
   ): Promise<string> {
     try {
       const userId = await this.getAuthenticatedUserId();
 
-      console.log('💾 Saving writer suggestions to library...', {
+      console.log('💾 Saving writer suggestions to library with enhanced session...', {
         scriptTitle,
         mentorNames,
-        pages
+        pages,
+        hasOriginalFeedback: !!originalFeedback,
+        sessionType: suggestions.sessionType || 'legacy'
       });
 
-      // Encrypt the suggestions content
+   // ENHANCED: Create complete writer suggestions session with better validation
+      const writerSuggestionsSession = {
+        // Core suggestions data - handle both legacy and enhanced formats
+        suggestions: suggestions.suggestions || [],
+        success: suggestions.success !== undefined ? suggestions.success : true,
+        mentor_id: suggestions.mentor_id || mentorIds[0],
+        timestamp: suggestions.timestamp || new Date().toISOString(),
+        
+        // NEW: Session metadata with validation
+        sessionType: suggestions.sessionType || 'writer_suggestions',
+        originalFeedback: originalFeedback || suggestions.originalFeedback || null,
+        
+        // ENHANCED: Script context with comprehensive fallback
+        scriptContext: suggestions.scriptContext || {
+          scriptId,
+          scriptTitle,
+          pages,
+          generatedFrom: 'feedback_session',
+          savedAt: new Date().toISOString()
+        },
+        
+        // Version tracking
+        version: suggestions.version || '1.1'
+      };
+
+      console.log('📚 Saving enhanced writer suggestions session:', {
+        sessionType: writerSuggestionsSession.sessionType,
+        suggestionCount: writerSuggestionsSession.suggestions.length,
+        hasOriginalFeedback: !!writerSuggestionsSession.originalFeedback,
+        scriptContext: writerSuggestionsSession.scriptContext
+      });
+
+      // Encrypt the complete session
       const encryptedContent = await EncryptionService.encryptContent(
-        JSON.stringify(suggestions), 
+        JSON.stringify(writerSuggestionsSession),
         userId
       );
 
       const suggestionsData = {
         script_id: scriptId,
-        title: scriptTitle,
+        title: `${scriptTitle} - Writer Suggestions`,
         mentor_ids: mentorIds,
         mentor_names: mentorNames,
         pages,

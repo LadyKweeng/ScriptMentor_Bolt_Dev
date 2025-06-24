@@ -10,7 +10,8 @@ import {
   CheckCircle,
   Sparkles,
   Coins,
-  ArrowDown
+  ArrowDown,
+  Target
 } from 'lucide-react';
 import ChunkedFeedbackView from './ChunkedFeedbackView';
 import { backendApiService } from '../services/backendApiService';
