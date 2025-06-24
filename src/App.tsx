@@ -1444,6 +1444,52 @@ const handleShowWriterSuggestions = async () => {
                 setFeedback(blendedFeedback);
                 refreshTokenDisplay();
 
+                // NEW: Auto-save blended feedback to library
+                try {
+                  // Extract mentor IDs and names for blended feedback
+                  const blendedMentorIds = selectedMentorsList.map(m => m.id);
+                  const blendedMentorNames = selectedMentorsList.map(m => m.name).join(', ');
+
+                  // Determine effective script context
+                  const effectiveScriptId = currentScript?.id || scene.id;
+                  const effectiveScriptTitle = currentScript?.title || scene.title;
+                  const effectivePages = currentScript
+                    ? (currentScript.totalPages ? `Pages 1-${currentScript.totalPages}` : `${currentScript.chunks.length} Sections`)
+                    : 'Single Scene';
+                  const effectiveScriptContent = currentScript?.originalContent || scene.content;
+
+                  console.log('📚 Auto-saving blended feedback to library:', {
+                    scriptId: effectiveScriptId,
+                    scriptTitle: effectiveScriptTitle,
+                    mentorIds: blendedMentorIds,
+                    mentorNames: blendedMentorNames,
+                    pages: effectivePages,
+                    feedbackId: blendedFeedback.id
+                  });
+
+                  await feedbackLibraryService.saveFeedbackSessionToLibrary(
+                    effectiveScriptId,
+                    effectiveScriptTitle,
+                    blendedMentorIds,
+                    blendedMentorNames,
+                    effectivePages,
+                    blendedFeedback,
+                    effectiveScriptContent
+                  );
+                  console.log('✅ Blended feedback auto-saved to library successfully');
+                } catch (error) {
+                  const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+                  console.warn('⚠️ Blended feedback auto-save failed (non-critical):', errorMessage);
+                  console.warn('Blended feedback auto-save diagnostic info:', {
+                    scriptId: currentScript?.id || scene.id,
+                    scriptTitle: currentScript?.title || scene.title,
+                    feedbackId: blendedFeedback?.id,
+                    mentorCount: selectedMentorsList.length,
+                    selectedMentors: selectedMentorsList.map(m => m.name)
+                  });
+                  // Never throw - auto-save failure shouldn't break feedback generation
+                }
+
                 // Enable writer suggestions for blended chunked feedback
                 if (selectedChunkId) {
                   const selectedChunk = currentScript.chunks.find(c => c.id === selectedChunkId);
@@ -1718,11 +1764,40 @@ const handleShowWriterSuggestions = async () => {
               } as Feedback;
 
               setFeedback(blendedFeedback);
+
+              // NEW: Auto-save blended single scene feedback to library
+              try {
+                const blendedMentorIds = selectedMentorsList.map(m => m.id);
+                const blendedMentorNames = selectedMentorsList.map(m => m.name).join(', ');
+
+                console.log('📚 Auto-saving blended single scene feedback to library:', {
+                  sceneId: sceneForBlending.id,
+                  sceneTitle: sceneForBlending.title,
+                  mentorIds: blendedMentorIds,
+                  mentorNames: blendedMentorNames,
+                  feedbackId: blendedFeedback.id
+                });
+
+                await feedbackLibraryService.saveFeedbackSessionToLibrary(
+                  sceneForBlending.id,
+                  sceneForBlending.title,
+                  blendedMentorIds,
+                  blendedMentorNames,
+                  'Single Scene',
+                  blendedFeedback,
+                  sceneForBlending.content
+                );
+                console.log('✅ Blended single scene feedback auto-saved to library successfully');
+              } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+                console.warn('⚠️ Blended single scene feedback auto-save failed (non-critical):', errorMessage);
+                // Never throw - auto-save failure shouldn't break feedback generation
+              }
             } else {
               console.log('🛑 Blended single scene fallback feedback was cancelled');
               return; // ✅ FIX: Early return on cancellation
             }
-            
+
             // Enable writer suggestions for blended single scene feedback
             setIsGeneratingWriterSuggestions(true);
             setWriterSuggestionsStarted(true);

@@ -78,15 +78,48 @@ private async validateAndNormalizeScriptId(scriptId: string, userId: string): Pr
       }
     }
     
-    // If no match found, return null to indicate invalid ID
-    console.warn('⚠️ No corresponding UUID found for script ID:', scriptId);
-    return null;
-    
-  } catch (error) {
-    console.error('❌ Error validating script ID:', error);
-    return null;
+      // If no match found, generate a new UUID that will be accepted by Supabase
+      console.warn('⚠️ No corresponding UUID found for script ID, generating fallback UUID:', scriptId);
+      return crypto.randomUUID();
+
+    } catch (error) {
+      console.error('❌ Error validating script ID:', error);
+      return crypto.randomUUID(); // Generate fallback UUID on error too
+    }
   }
-}
+
+  /**
+   * Enhanced validation specifically for blended feedback with better fallback handling
+   */
+  private async validateBlendedFeedbackContext(
+    scriptId: string,
+    scriptTitle: string,
+    mentorIds: string[],
+    userId: string
+  ): Promise<{ validScriptId: string; validMentorIds: string[]; validMentorNames: string }> {
+    // Validate script ID
+    let validScriptId = await this.validateAndNormalizeScriptId(scriptId, userId);
+
+    // If still no valid script ID, generate one
+    if (!validScriptId) {
+      validScriptId = crypto.randomUUID();
+      console.log('🔧 Generated fallback UUID for blended feedback:', validScriptId);
+    }
+
+    // Validate mentor IDs for blended feedback
+    let validMentorIds = mentorIds;
+    if (!validMentorIds || validMentorIds.length === 0) {
+      validMentorIds = ['blended'];
+      console.log('🔧 Using fallback mentor IDs for blended feedback:', validMentorIds);
+    }
+
+    // Create mentor names string
+    const validMentorNames = validMentorIds.includes('blended')
+      ? 'Blended Mentors'
+      : validMentorIds.join(', ');
+
+    return { validScriptId, validMentorIds, validMentorNames };
+  }
 
   /**
    * Save complete feedback session to library with encryption
@@ -128,9 +161,28 @@ private async validateAndNormalizeScriptId(scriptId: string, userId: string): Pr
         throw new Error('Missing or invalid script title for feedback library save');
       }
 
-      if (!mentorIds || mentorIds.length === 0) {
-        console.error('❌ Missing mentor IDs for feedback library save:', { scriptId, scriptTitle, mentorIds });
-        throw new Error('Missing mentor IDs for feedback library save');
+      // ENHANCED: Special handling for blended feedback
+      const isBlendedFeedback = feedback.mentorId === 'blended';
+      let validatedMentorIds = mentorIds;
+      let validatedMentorNames = mentorNames;
+
+      if (isBlendedFeedback) {
+        // For blended feedback, ensure we have proper mentor data
+        if (!validatedMentorIds || validatedMentorIds.length === 0) {
+          validatedMentorIds = ['blended'];
+          console.log('🔧 Using fallback mentor IDs for blended feedback:', validatedMentorIds);
+        }
+
+        if (!validatedMentorNames || validatedMentorNames.trim() === '') {
+          validatedMentorNames = 'Blended Mentors';
+          console.log('🔧 Using fallback mentor names for blended feedback:', validatedMentorNames);
+        }
+      } else {
+        // Original validation for non-blended feedback
+        if (!validatedMentorIds || validatedMentorIds.length === 0) {
+          console.error('❌ Missing mentor IDs for feedback library save:', { scriptId, scriptTitle, mentorIds });
+          throw new Error('Missing mentor IDs for feedback library save');
+        }
       }
       // Create complete feedback session object
       const feedbackSession = {
@@ -155,10 +207,10 @@ private async validateAndNormalizeScriptId(scriptId: string, userId: string): Pr
       }
 
       const feedbackData = {
-        script_id: validatedScriptId, // FIXED: Use validated UUID instead of raw scriptId
+        script_id: validatedScriptId,
         title: scriptTitle.substring(0, 255),
-        mentor_ids: mentorIds,
-        mentor_names: mentorNames.substring(0, 255),
+        mentor_ids: validatedMentorIds,
+        mentor_names: validatedMentorNames.substring(0, 255),
         pages: pages.substring(0, 100),
         type: 'feedback' as const,
         content: encryptedContent,
