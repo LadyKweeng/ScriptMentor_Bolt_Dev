@@ -107,7 +107,7 @@ const App: React.FC = () => {
   const [userTokens, setUserTokens] = useState<UserTokens | null>(null);
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [showTokenDetails, setShowTokenDetails] = useState(false);
-  const [writerSuggestions, setWriterSuggestions] = useState<WriterSuggestionsResponse | null>(null);
+  const [writerSuggestions, setWriterSuggestions] = useState<any | null>(null);
   const [rewriteAnalysis, setRewriteAnalysis] = useState<any>(null);
   
   // PRESERVED: Ref to track if database test has been run
@@ -2369,34 +2369,41 @@ const handleShowWriterSuggestions = async () => {
     try {
       console.log('📚 Loading writer suggestions session from library:', item.id);
       const decryptedItem = await feedbackLibraryService.getFeedbackLibraryItem(item.id);
-      
+
       // Check if this is a complete suggestions session
       if (decryptedItem.content.sessionType === 'writer_suggestions') {
         const session = decryptedItem.content;
-        
+
         // Restore the original feedback context if available
         if (session.originalFeedback) {
           setFeedback(session.originalFeedback);
           setSelectedMentorId(session.originalFeedback.mentorId || 'blended');
         }
-        
-        // Load writer suggestions
-        setWriterSuggestions(session.writerSuggestions);
+
+        // FIXED: Load writer suggestions - use the complete session object with library flag
+        setWriterSuggestions({
+          ...session,
+          isFromLibrary: true  // ✅ ADD THIS FLAG
+        });
         setShowWriterSuggestions(true);
       } else {
-        // Handle legacy format
-        setWriterSuggestions(decryptedItem.content);
+        // Handle legacy format - wrap in session-like structure
+        const legacySession = {
+          suggestions: decryptedItem.content.suggestions || [],
+          sessionType: 'writer_suggestions',
+          timestamp: new Date().toISOString(),
+          isFromLibrary: true
+        };
+        setWriterSuggestions(legacySession);
         setShowWriterSuggestions(true);
       }
-      
-      // NEW: Close both libraries and ensure we're in main view
+
+      // Close both libraries and ensure we're in main view
       setShowFeedbackLibrary(false);
       setShowLibrary(false);
-      
+
       console.log('✅ Writer suggestions session loaded from library successfully');
-      
-      // NEW: Ensure we navigate to the main feedback view with suggestions open
-      // The suggestions will be automatically displayed in the main workspace
+
     } catch (error) {
       console.error('❌ Failed to load writer suggestions session from library:', error);
       setTokenError(`Failed to load writer suggestions: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -2625,17 +2632,19 @@ const handleShowWriterSuggestions = async () => {
             <RewriteSuggestions
               originalScene={displayScene}
               feedback={feedback || partialFeedback!}
-              mentor={selectedMentor} // ENHANCED: Now optional, component handles undefined case
+              mentor={selectedMentor}
               selectedChunkId={selectedChunkId}
-              userId={session?.user?.id} // NEW: Pass userId for token integration
-              // NEW: Pass script context for auto-saving
+              userId={session?.user?.id}
               scriptId={currentScript?.id}
               scriptTitle={currentScript?.title}
               currentPages={getCurrentPageRange()}
+              // FIXED: Only pass saved suggestions when actually from library
+              savedSuggestions={writerSuggestions?.sessionType === 'writer_suggestions' ? writerSuggestions : undefined}
+              isFromLibrary={writerSuggestions?.sessionType === 'writer_suggestions' && !!writerSuggestions.isFromLibrary}
               onClose={() => {
                 console.log('🔄 Closing writer suggestions and resetting state');
                 setShowWriterSuggestions(false);
-                setWriterSuggestions(null); // Clear suggestions when closing
+                setWriterSuggestions(null);
               }}
             />
           </div>

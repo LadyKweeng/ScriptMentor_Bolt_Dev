@@ -24,14 +24,16 @@ import { feedbackLibraryService } from '../services/feedbackLibraryService';
 interface RewriteSuggestionsProps {
   feedback: Feedback;
   originalScene: ScriptScene | ScriptChunk;
-  mentor?: Mentor; // FIXED: Make mentor optional to handle undefined cases
+  mentor?: Mentor;
   selectedChunkId?: string | null;
   onClose: () => void;
-  userId?: string; // NEW: Add userId for token integration
-  // NEW: Add script context for auto-saving
+  userId?: string;
   scriptId?: string;
   scriptTitle?: string;
   currentPages?: string;
+  // NEW: Add support for pre-loaded suggestions
+  savedSuggestions?: any; // The saved suggestions session
+  isFromLibrary?: boolean; // Flag to indicate this is from library
 }
 
 // PRESERVED: Complex WriterSuggestion interface from current version
@@ -60,10 +62,12 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
   selectedChunkId,
   onClose,
   userId,
-  // FIXED: Extract all script context props
   scriptId,
   scriptTitle,
-  currentPages
+  currentPages,
+  // NEW: Accept saved suggestions and library flag
+  savedSuggestions,
+  isFromLibrary = false
 }) => {
   const [suggestions, setSuggestions] = useState<WriterSuggestion[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -309,9 +313,29 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
     extractChunkFeedback();
   }, [feedback, selectedChunkId, isChunked, mentor, originalScene.id]);
 
-  // ENHANCED: Generate suggestions when we have valid data, regardless of source
+  // ENHANCED: Handle both saved suggestions and new generation
   useEffect(() => {
-    if (currentChunkFeedback && mentor) {
+    if (isFromLibrary && savedSuggestions) {
+      // Skip generation, use saved content
+      console.log('📚 Loading saved writer suggestions from library:', {
+        suggestionCount: savedSuggestions.suggestions?.length || 0,
+        sessionType: savedSuggestions.sessionType,
+        hasOriginalFeedback: !!savedSuggestions.originalFeedback
+      });
+
+      try {
+        const processedSuggestions = savedSuggestions.suggestions || [];
+        setSuggestions(processedSuggestions);
+        setIsLoading(false);
+        setError(null);
+
+        console.log('✅ Saved writer suggestions loaded successfully');
+      } catch (error) {
+        console.error('❌ Failed to process saved suggestions:', error);
+        setError('Failed to load saved suggestions');
+        setIsLoading(false);
+      }
+    } else if (currentChunkFeedback && mentor) {
       generateWriterSuggestions();
     } else if (feedback && mentor && !isChunked) {
       // ENHANCED: Handle direct feedback without chunk processing
@@ -321,7 +345,7 @@ const RewriteSuggestions: React.FC<RewriteSuggestionsProps> = ({
     } else {
       setIsLoading(false);
     }
-  }, [currentChunkFeedback, feedback, mentor, originalScene.id, isChunked]);
+  }, [currentChunkFeedback, feedback, mentor, originalScene.id, isChunked, isFromLibrary, savedSuggestions]);
 
   const generateWriterSuggestions = async () => {
     // FIXED: Always validate mentor exists
