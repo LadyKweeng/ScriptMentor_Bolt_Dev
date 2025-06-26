@@ -1,6 +1,3 @@
-// supabase/functions/trigger-monthly-reset/index.ts
-// Simple trigger function for manual or external scheduling systems
-
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 
 Deno.serve(async (req) => {
