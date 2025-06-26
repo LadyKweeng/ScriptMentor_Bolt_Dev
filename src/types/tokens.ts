@@ -184,6 +184,10 @@ export function calculateTokenCost(actionType: TokenUsage['action_type'], tier: 
   return baseCost;
 }
 
+export function getTierAllowance(tier: UserTokens['tier']): number {
+  return TIER_LIMITS[tier].tokens;
+}
+
 export function getDaysUntilReset(lastResetDate: string): number {
   const resetDate = new Date(lastResetDate);
   const nextReset = new Date(resetDate);
