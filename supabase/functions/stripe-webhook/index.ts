@@ -68,47 +68,48 @@ Deno.serve(async (req) => {
 });
 
 async function handleEvent(event: Stripe.Event) {
-  const stripeData = event?.data?.object ?? {};
+  console.log(`🔔 Processing webhook event: ${event.type}`);
 
-  if (!stripeData) {
-    console.log('No data object in event');
-    return;
-  }
+  try {
+    switch (event.type) {
+      // Subscription lifecycle events
+      case 'customer.subscription.created':
+        await handleSubscriptionCreated(event.data.object as Stripe.Subscription);
+        break;
 
-  console.log(`Processing event: ${event.type}`);
+      case 'customer.subscription.updated':
+        await handleSubscriptionUpdated(event.data.object as Stripe.Subscription);
+        break;
 
-  // Handle different event types
-  switch (event.type) {
-    case 'checkout.session.completed':
-      await handleCheckoutCompleted(stripeData as Stripe.Checkout.Session);
-      break;
-      
-    case 'customer.subscription.created':
-    case 'customer.subscription.updated':
-      await handleSubscriptionChange(stripeData as Stripe.Subscription);
-      break;
-      
-    case 'customer.subscription.deleted':
-      await handleSubscriptionCancelled(stripeData as Stripe.Subscription);
-      break;
-      
-    case 'invoice.payment_succeeded':
-      await handlePaymentSucceeded(stripeData as Stripe.Invoice);
-      break;
-      
-    case 'invoice.payment_failed':
-      await handlePaymentFailed(stripeData as Stripe.Invoice);
-      break;
-      
-    case 'payment_intent.succeeded':
-      // Handle one-time token purchases  
-      if (event.data.object.invoice === null) {
-        await handleOneTimePayment(stripeData as Stripe.PaymentIntent);
-      }
-      break;
-      
-    default:
-      console.log(`Unhandled event type: ${event.type}`);
+      case 'customer.subscription.deleted':
+        await handleSubscriptionDeleted(event.data.object as Stripe.Subscription);
+        break;
+
+      // Payment events
+      case 'invoice.payment_succeeded':
+        await handlePaymentSucceeded(event.data.object as Stripe.Invoice);
+        break;
+
+      case 'invoice.payment_failed':
+        await handlePaymentFailed(event.data.object as Stripe.Invoice);
+        break;
+
+      // Checkout completion
+      case 'checkout.session.completed':
+        await handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session);
+        break;
+
+      // Customer events
+      case 'customer.subscription.trial_will_end':
+        await handleTrialWillEnd(event.data.object as Stripe.Subscription);
+        break;
+
+      default:
+        console.log(`⚠️ Unhandled event type: ${event.type}`);
+    }
+  } catch (error) {
+    console.error(`❌ Error handling ${event.type}:`, error);
+    throw error; // Re-throw to ensure webhook returns error status
   }
 }
 
@@ -386,4 +387,219 @@ async function allocateTokensToUser(
     console.error(`Failed to allocate tokens to user ${userId}:`, error);
     throw error;
   }
+}
+
+// Enhanced subscription event handlers
+async function handleSubscriptionCreated(subscription: Stripe.Subscription) {
+  console.log(`✅ New subscription created: ${subscription.id}`);
+
+  if (!subscription.customer || typeof subscription.customer !== 'string') {
+    throw new Error('No customer ID in subscription created event');
+  }
+
+  // Sync customer data and allocate initial tokens
+  await syncCustomerFromStripe(subscription.customer);
+
+  // Send welcome email or trigger onboarding (if needed)
+  await notifySubscriptionChange(subscription.customer, 'created', subscription);
+}
+
+async function handleSubscriptionUpdated(subscription: Stripe.Subscription) {
+  console.log(`🔄 Subscription updated: ${subscription.id}`);
+
+  if (!subscription.customer || typeof subscription.customer !== 'string') {
+    throw new Error('No customer ID in subscription updated event');
+  }
+
+  // Handle plan changes, billing cycle updates, etc.
+  await syncCustomerFromStripe(subscription.customer);
+
+  // Check if this was a plan upgrade/downgrade
+  await handlePlanChangeIfNeeded(subscription);
+}
+
+async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
+  console.log(`❌ Subscription deleted: ${subscription.id}`);
+
+  if (!subscription.customer || typeof subscription.customer !== 'string') {
+    throw new Error('No customer ID in subscription deleted event');
+  }
+
+  // Get user ID from customer mapping
+  const { data: customer } = await supabase
+    .from('stripe_customers')
+    .select('user_id')
+    .eq('customer_id', subscription.customer)
+    .single();
+
+  if (!customer) {
+    console.error(`No user mapping found for customer: ${subscription.customer}`);
+    return;
+  }
+
+  // Revert to free tier
+  await allocateTokensToUser(
+    customer.user_id,
+    50,
+    'free',
+    null,
+    'Subscription deleted - reverted to free tier'
+  );
+
+  // Update subscription status in database
+  const { error } = await supabase
+    .from('stripe_subscriptions')
+    .update({
+      status: 'deleted',
+      subscription_status: 'deleted',
+      updated_at: new Date().toISOString()
+    })
+    .eq('customer_id', subscription.customer);
+
+  if (error) {
+    console.error('Error updating subscription status:', error);
+  }
+
+  await notifySubscriptionChange(subscription.customer, 'deleted', subscription);
+}
+
+async function handleTrialWillEnd(subscription: Stripe.Subscription) {
+  console.log(`⏰ Trial ending soon for subscription: ${subscription.id}`);
+
+  if (!subscription.customer || typeof subscription.customer !== 'string') {
+    return;
+  }
+
+  // Send trial ending notification
+  await notifySubscriptionChange(subscription.customer, 'trial_ending', subscription);
+}
+
+async function handlePlanChangeIfNeeded(subscription: Stripe.Subscription) {
+  try {
+    const { data: existingSub } = await supabase
+      .from('stripe_subscriptions')
+      .select('price_id')
+      .eq('subscription_id', subscription.id)
+      .single();
+
+    const currentPriceId = subscription.items.data[0]?.price?.id;
+
+    if (existingSub && existingSub.price_id !== currentPriceId) {
+      console.log(`🔄 Plan change detected: ${existingSub.price_id} → ${currentPriceId}`);
+
+      // Handle prorated token allocation for plan changes
+      await handleProratedTokenAllocation(subscription, existingSub.price_id, currentPriceId);
+    }
+  } catch (error) {
+    console.error('Error checking for plan changes:', error);
+  }
+}
+
+async function handleProratedTokenAllocation(
+  subscription: Stripe.Subscription,
+  oldPriceId: string,
+  newPriceId: string
+) {
+  if (!subscription.customer || typeof subscription.customer !== 'string') {
+    return;
+  }
+
+  const { data: customer } = await supabase
+    .from('stripe_customers')
+    .select('user_id')
+    .eq('customer_id', subscription.customer)
+    .single();
+
+  if (!customer) {
+    console.error(`No user mapping found for customer: ${subscription.customer}`);
+    return;
+  }
+
+  const oldConfig = PRICE_ID_TO_TOKENS[oldPriceId];
+  const newConfig = PRICE_ID_TO_TOKENS[newPriceId];
+
+  if (!newConfig) {
+    console.warn(`Unknown new price ID: ${newPriceId}`);
+    return;
+  }
+
+  // Calculate prorated tokens based on billing cycle progress
+  const now = new Date();
+  const periodStart = new Date(subscription.current_period_start * 1000);
+  const periodEnd = new Date(subscription.current_period_end * 1000);
+
+  const totalPeriodDays = Math.ceil((periodEnd.getTime() - periodStart.getTime()) / (1000 * 60 * 60 * 24));
+  const remainingDays = Math.ceil((periodEnd.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+
+  // Calculate prorated tokens for remaining billing period
+  const dailyAllowance = newConfig.tokens / totalPeriodDays;
+  const proratedTokens = Math.ceil(dailyAllowance * remainingDays);
+
+  // Get current balance to preserve unused tokens
+  const { data: currentTokens } = await supabase
+    .from('user_tokens')
+    .select('balance')
+    .eq('user_id', customer.user_id)
+    .single();
+
+  const preservedTokens = currentTokens?.balance || 0;
+  const totalTokens = preservedTokens + proratedTokens;
+
+  console.log(`📊 Prorated allocation: ${proratedTokens} new + ${preservedTokens} existing = ${totalTokens} total`);
+
+  // Update user tokens with prorated amount
+  const { error } = await supabase
+    .from('user_tokens')
+    .update({
+      balance: totalTokens,
+      monthly_allowance: newConfig.tokens,
+      tier: newConfig.tier,
+      updated_at: new Date().toISOString()
+    })
+    .eq('user_id', customer.user_id);
+
+  if (error) {
+    console.error('Error updating prorated tokens:', error);
+    throw error;
+  }
+
+  // Log the plan change transaction
+  await supabase.rpc('add_user_tokens', {
+    p_user_id: customer.user_id,
+    p_tokens_to_add: proratedTokens,
+    p_transaction_type: 'subscription_grant',
+    p_stripe_subscription_id: subscription.id,
+    p_description: `Plan change: ${oldConfig?.tier || 'unknown'} → ${newConfig.tier} (prorated)`
+  });
+}
+
+async function notifySubscriptionChange(
+  customerId: string,
+  changeType: 'created' | 'deleted' | 'trial_ending',
+  subscription: Stripe.Subscription
+) {
+  // Get user email for notifications
+  const { data: customer } = await supabase
+    .from('stripe_customers')
+    .select('user_id')
+    .eq('customer_id', customerId)
+    .single();
+
+  if (!customer) {
+    console.error(`No user mapping found for customer: ${customerId}`);
+    return;
+  }
+
+  // Get user email
+  const { data: user } = await supabase.auth.admin.getUserById(customer.user_id);
+
+  if (!user.user?.email) {
+    console.error(`No email found for user: ${customer.user_id}`);
+    return;
+  }
+
+  console.log(`📧 Would send ${changeType} notification to: ${user.user.email}`);
+
+  // TODO: Implement actual email notifications here
+  // This could integrate with your email service (SendGrid, etc.)
 }
