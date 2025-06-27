@@ -1,9 +1,10 @@
 // src/components/TokenDisplay.tsx
 import React, { useState, useEffect } from 'react';
-import { Coins, AlertCircle, TrendingUp, Clock, Crown, Star, Zap } from 'lucide-react';
+import { Coins, AlertCircle, TrendingUp, Clock, Crown, Star, Zap, RefreshCw } from 'lucide-react';
 import { UserTokens, TokenUsageStats, TOKEN_COSTS } from '../types';
 import { tokenService } from '../services/tokenService';
 import { TokenUtils } from '../utils/tokenValidationMiddleware';
+import { useTokens } from '../hooks/useTokens';
 
 interface TokenDisplayProps {
   userId: string;
@@ -18,41 +19,32 @@ export const TokenDisplay: React.FC<TokenDisplayProps> = ({
   showDetailed = false,
   onTokenUpdate
 }) => {
-  const [userTokens, setUserTokens] = useState<UserTokens | null>(null);
-  const [usageStats, setUsageStats] = useState<TokenUsageStats | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (userId) {
-      loadTokenData();
-    }
-  }, [userId]);
-
-  const loadTokenData = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-
-      const [tokens, stats] = await Promise.all([
-        tokenService.getUserTokenBalance(userId),
-        showDetailed ? tokenService.getTokenUsageStats(userId) : Promise.resolve(null)
-      ]);
-
-      if (tokens) {
-        setUserTokens(tokens);
-        onTokenUpdate?.(tokens);
+  // ENHANCED: Use the new useTokens hook for real-time updates
+  const {
+    userTokens,
+    loading,
+    error,
+    balance,
+    tier,
+    monthlyAllowance,
+    usageThisMonth,
+    daysUntilReset,
+    balanceStatus,
+    usageStats,
+    refreshTokens
+  } = useTokens({
+    userId,
+    autoRefresh: true,
+    onBalanceChange: (newBalance, oldBalance) => {
+      if (userTokens && onTokenUpdate) {
+        onTokenUpdate(userTokens);
       }
-      
-      if (stats) {
-        setUsageStats(stats);
-      }
-    } catch (err) {
-      console.error('Error loading token data:', err);
-      setError('Failed to load token information');
-    } finally {
-      setLoading(false);
     }
+  });
+
+  // Manual refresh handler
+  const handleRefresh = async () => {
+    await refreshTokens();
   };
 
   const getTierIcon = (tier: UserTokens['tier']) => {
@@ -126,21 +118,36 @@ export const TokenDisplay: React.FC<TokenDisplayProps> = ({
           {getTierIcon(userTokens.tier)}
           <h3 className="font-semibold text-slate-800">Token Balance</h3>
         </div>
-        <span className={`text-xs px-2 py-1 rounded-full ${getTierColor(userTokens.tier)}`}>
-          {userTokens.tier.charAt(0).toUpperCase() + userTokens.tier.slice(1)} Tier
-        </span>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleRefresh}
+            className="p-1 hover:bg-slate-100 rounded transition-colors"
+            disabled={loading}
+            title="Refresh token balance"
+          >
+            <RefreshCw className={`h-4 w-4 text-slate-500 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+          <span className={`text-xs px-2 py-1 rounded-full ${getTierColor(userTokens.tier)}`}>
+            {userTokens.tier.charAt(0).toUpperCase() + userTokens.tier.slice(1)} Tier
+          </span>
+        </div>
       </div>
 
       {/* Balance Progress Bar */}
       <div className="mb-4">
         <div className="flex justify-between mb-1">
-          <span className={`text-lg font-bold ${getBalanceColor(userTokens.balance, userTokens.monthly_allowance)}`}>
-            {userTokens.balance} tokens
+          <span className={`text-lg font-bold ${getBalanceColor(balance, monthlyAllowance)}`}>
+            {balance} tokens
           </span>
           <span className="text-sm text-slate-500">
-            of {userTokens.monthly_allowance}
+            of {monthlyAllowance} • {usageThisMonth} used
           </span>
         </div>
+        {balanceStatus === 'critical' && (
+          <div className="text-xs text-red-600 mb-1">
+            ⚠️ Critical balance - consider upgrading
+          </div>
+        )}
         <div className="w-full bg-slate-200 rounded-full h-2">
           <div 
             className={`h-2 rounded-full ${

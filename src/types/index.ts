@@ -366,6 +366,61 @@ export function getTierAllowance(tier: UserTokens['tier']): number {
   return TIER_LIMITS[tier].tokens;
 }
 
+// NEW: Advanced analytics and status interfaces
+export interface UserAnalytics {
+  currentMonth: {
+    used: number;
+    remaining: number;
+    percentage: number;
+    tier: UserTokens['tier'];
+  };
+  recentUsage: Array<{
+    date: string;
+    tokensUsed: number;
+    actionType: TokenUsage['action_type'];
+  }>;
+  projectedUsage: {
+    endOfMonth: number;
+    willExceedLimit: boolean;
+    recommendedTier?: UserTokens['tier'];
+  };
+  efficiency: {
+    tokensPerAction: Record<TokenUsage['action_type'], number>;
+    mostUsedAction: TokenUsage['action_type'];
+    recommendations: string[];
+  };
+}
+
+export interface SubscriptionStatus {
+  hasActiveSubscription: boolean;
+  tier: UserTokens['tier'];
+  billingCycle: string;
+  nextBillingDate?: string;
+  canceledAt?: string;
+  features: {
+    blendedFeedback: boolean;
+    writerAgent: boolean;
+    chunkedFeedback: boolean;
+    premiumMentors: boolean;
+    prioritySupport: boolean;
+  };
+}
+
+export interface BatchValidationResult {
+  canAffordAll: boolean;
+  totalCost: number;
+  currentBalance: number;
+  insufficientActions: Array<{
+    actionType: TokenUsage['action_type'];
+    required: number;
+    shortfall: number;
+  }>;
+}
+
+// Real-time subscription types
+export type TokenUpdateCallback = (tokens: UserTokens) => void;
+export type UnsubscribeFunction = () => void;
+
 // NEW: Token-aware service interfaces
 export interface TokenAwareRequest {
   userId: string;

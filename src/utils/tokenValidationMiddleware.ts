@@ -19,6 +19,36 @@ export interface TokenUsageContext {
   additionalContext?: Record<string, any>;
 }
 
+// ENHANCED: Comprehensive validation result interface
+export interface ValidationResult {
+  success: boolean;
+  canProceed: boolean;
+  tokenInfo: {
+    cost: number;
+    currentBalance: number;
+    requiredTokens: number;
+    shortfall?: number;
+    tier: UserTokens['tier'];
+  };
+  userInfo: {
+    hasActiveSubscription: boolean;
+    monthlyAllowance: number;
+    usageThisMonth: number;
+    daysUntilReset: number;
+  };
+  restrictions?: {
+    tierRequired?: UserTokens['tier'];
+    featureBlocked: boolean;
+    reason?: string;
+  };
+  recommendations?: {
+    upgradeToTier?: UserTokens['tier'];
+    purchaseTokens?: number;
+    alternativeActions?: TokenUsage['action_type'][];
+  };
+  error?: string;
+}
+
 /**
  * Token Validation Middleware
  * Provides comprehensive token validation before AI operations
@@ -146,40 +176,49 @@ export class TokenValidationMiddleware {
   }
   
   /**
-   * Check if user's tier allows a specific action
+   * ENHANCED: Check if user's tier allows a specific action with detailed reasoning
    */
   static checkTierPermissions(
     userTier: UserTokens['tier'],
     actionType: TokenUsage['action_type']
-  ): { allowed: boolean; reason?: string } {
+  ): {
+    allowed: boolean;
+    minimumTier?: UserTokens['tier'];
+    reason?: string;
+  } {
+    // Define tier requirements for each action
+    const tierRequirements: Record<TokenUsage['action_type'], UserTokens['tier'] | null> = {
+      single_feedback: null, // Available to all tiers
+      blended_feedback: 'creator',
+      chunked_feedback: null, // Available to all but expensive for free tier
+      rewrite_suggestions: 'creator',
+      writer_agent: 'creator'
+    };
+
+    const requiredTier = tierRequirements[actionType];
     
-    // Free tier restrictions
-    if (userTier === 'free') {
-      switch (actionType) {
-        case 'blended_feedback':
-          return {
-            allowed: false,
-            reason: 'Blended feedback requires Creator tier or higher'
-          };
-        case 'writer_agent':
-          return {
-            allowed: false,
-            reason: 'Writer Agent requires Creator tier or higher'
-          };
-        case 'chunked_feedback':
-          return {
-            allowed: true // Free users can use chunked feedback but it costs more tokens
-          };
-        case 'single_feedback':
-        case 'rewrite_suggestions':
-          return { allowed: true };
-        default:
-          return { allowed: true };
-      }
+    if (!requiredTier) {
+      return { allowed: true };
     }
-    
-    // Creator and Pro tiers have access to all features
-    return { allowed: true };
+
+    const tierHierarchy: Record<UserTokens['tier'], number> = {
+      free: 0,
+      creator: 1,
+      pro: 2
+    };
+
+    const userTierLevel = tierHierarchy[userTier];
+    const requiredTierLevel = tierHierarchy[requiredTier];
+
+    if (userTierLevel >= requiredTierLevel) {
+      return { allowed: true };
+    }
+
+    return {
+      allowed: false,
+      minimumTier: requiredTier,
+      reason: `${actionType.replace('_', ' ')} requires ${requiredTier} tier or higher`
+    };
   }
   
   /**
@@ -291,6 +330,191 @@ export class TokenValidationMiddleware {
         error: 'Transaction processing failed'
       };
     }
+  }
+
+  /**
+   * NEW: Comprehensive validation with advanced analytics and recommendations
+   */
+  static async validateAction(context: TokenUsageContext): Promise<ValidationResult> {
+    try {
+      const { userId, actionType } = context;
+      
+      // Get user token information
+      const userTokens = await tokenService.getUserTokenBalance(userId);
+      if (!userTokens) {
+        return this.createErrorResult('User token information not found', actionType);
+      }
+
+      // Get action cost
+      const cost = tokenService.getTokenCost(actionType);
+      
+      // Validate token balance
+      const validation = await tokenService.validateTokenBalance(userId, cost);
+      
+      // Check tier permissions
+      const tierCheck = this.checkTierPermissions(userTokens.tier, actionType);
+      
+      // Calculate user info
+      const usageThisMonth = userTokens.monthly_allowance - userTokens.balance;
+      const daysUntilReset = this.calculateDaysUntilReset(userTokens.last_reset_date);
+      
+      // Generate recommendations
+      const recommendations = this.generateRecommendations(
+        userTokens,
+        actionType,
+        validation,
+        tierCheck
+      );
+
+      // Determine if action can proceed
+      const canProceed = validation.hasEnoughTokens && tierCheck.allowed;
+
+      return {
+        success: true,
+        canProceed,
+        tokenInfo: {
+          cost,
+          currentBalance: validation.currentBalance,
+          requiredTokens: validation.requiredTokens,
+          shortfall: validation.shortfall,
+          tier: validation.tier
+        },
+        userInfo: {
+          hasActiveSubscription: userTokens.tier !== 'free',
+          monthlyAllowance: userTokens.monthly_allowance,
+          usageThisMonth,
+          daysUntilReset
+        },
+        restrictions: tierCheck.allowed ? undefined : {
+          tierRequired: tierCheck.minimumTier,
+          featureBlocked: true,
+          reason: tierCheck.reason
+        },
+        recommendations
+      };
+
+    } catch (error) {
+      console.error('Token validation error:', error);
+      return this.createErrorResult(
+        error instanceof Error ? error.message : 'Validation failed',
+        context.actionType
+      );
+    }
+  }
+
+  /**
+   * NEW: Quick validation for UI display
+   */
+  static async quickValidate(
+    userId: string, 
+    actionType: TokenUsage['action_type']
+  ): Promise<{
+    canAfford: boolean;
+    cost: number;
+    balance: number;
+    tierAllowed: boolean;
+  }> {
+    try {
+      const userTokens = await tokenService.getUserTokenBalance(userId);
+      if (!userTokens) {
+        return { canAfford: false, cost: tokenService.getTokenCost(actionType), balance: 0, tierAllowed: false };
+      }
+
+      const cost = tokenService.getTokenCost(actionType);
+      const canAfford = userTokens.balance >= cost;
+      const tierCheck = this.checkTierPermissions(userTokens.tier, actionType);
+
+      return {
+        canAfford,
+        cost,
+        balance: userTokens.balance,
+        tierAllowed: tierCheck.allowed
+      };
+
+    } catch (error) {
+      console.error('Quick validation error:', error);
+      return { canAfford: false, cost: tokenService.getTokenCost(actionType), balance: 0, tierAllowed: false };
+    }
+  }
+
+  /**
+   * NEW: Helper methods for enhanced validation
+   */
+  private static generateRecommendations(
+    userTokens: UserTokens,
+    actionType: TokenUsage['action_type'],
+    validation: TokenValidationResult,
+    tierCheck: { allowed: boolean; minimumTier?: UserTokens['tier']; reason?: string }
+  ): ValidationResult['recommendations'] {
+    const recommendations: ValidationResult['recommendations'] = {};
+
+    // Tier upgrade recommendations
+    if (!tierCheck.allowed && tierCheck.minimumTier) {
+      recommendations.upgradeToTier = tierCheck.minimumTier;
+    }
+
+    // Token purchase recommendations
+    if (!validation.hasEnoughTokens && validation.shortfall) {
+      // Suggest purchasing tokens if close to having enough
+      if (validation.shortfall <= 100) {
+        recommendations.purchaseTokens = Math.ceil(validation.shortfall / 50) * 50; // Round up to nearest 50
+      }
+    }
+
+    // Alternative action suggestions
+    if (!tierCheck.allowed) {
+      const alternatives: TokenUsage['action_type'][] = [];
+      
+      switch (actionType) {
+        case 'blended_feedback':
+          alternatives.push('single_feedback');
+          break;
+        case 'chunked_feedback':
+          alternatives.push('single_feedback');
+          break;
+        case 'writer_agent':
+          alternatives.push('rewrite_suggestions', 'single_feedback');
+          break;
+      }
+
+      if (alternatives.length > 0) {
+        recommendations.alternativeActions = alternatives;
+      }
+    }
+
+    return Object.keys(recommendations).length > 0 ? recommendations : undefined;
+  }
+
+  private static calculateDaysUntilReset(lastResetDate: string): number {
+    const lastReset = new Date(lastResetDate);
+    const nextReset = new Date(lastReset);
+    nextReset.setMonth(nextReset.getMonth() + 1);
+    
+    const now = new Date();
+    const diffTime = nextReset.getTime() - now.getTime();
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    
+    return Math.max(0, diffDays);
+  }
+
+  private static createErrorResult(error: string, actionType: TokenUsage['action_type']): ValidationResult {
+    return {
+      success: false,
+      canProceed: false,
+      tokenInfo: {
+        cost: tokenService.getTokenCost(actionType),
+        currentBalance: 0,
+        requiredTokens: tokenService.getTokenCost(actionType),
+        tier: 'free'
+      },
+      userInfo: {
+        hasActiveSubscription: false,
+        monthlyAllowance: 0,
+        usageThisMonth: 0,
+        daysUntilReset: 0
+      },
+      error
+    };
   }
 }
 
@@ -436,6 +660,36 @@ export class TokenUtils {
       recommendation
     };
   }
+}
+
+/**
+ * NEW: React Hook for Token Validation
+ */
+export function useTokenValidation(userId: string) {
+  const validateAction = async (
+    actionType: TokenUsage['action_type'],
+    context?: Omit<TokenUsageContext, 'userId' | 'actionType'>
+  ): Promise<ValidationResult> => {
+    return TokenValidationMiddleware.validateAction({
+      userId,
+      actionType,
+      ...context
+    });
+  };
+
+  const quickCheck = async (actionType: TokenUsage['action_type']) => {
+    return TokenValidationMiddleware.quickValidate(userId, actionType);
+  };
+
+  const validateBatch = async (actions: Array<{ actionType: TokenUsage['action_type']; quantity?: number }>) => {
+    return TokenValidationMiddleware.validateMultipleActions(userId, actions);
+  };
+
+  return {
+    validateAction,
+    quickCheck,
+    validateBatch
+  };
 }
 
 // Export utility functions as well

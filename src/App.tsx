@@ -47,6 +47,8 @@ import FeedbackLibrary from './components/FeedbackLibrary'; // NEW: Add Feedback
 import RewriteEvaluation from './components/RewriteEvaluation';
 import { enhancedScriptRewriter } from './utils/enhancedScriptRewriter';
 import { feedbackLibraryService } from './services/feedbackLibraryService'; // NEW: Add feedback library service
+// NEW: Token integration hook
+import { useTokens } from './hooks/useTokens';
 
 // PRESERVED: Fixed LibraryButton component - moved outside App component to prevent recreation
 const LibraryButton: React.FC<{
@@ -103,12 +105,38 @@ const App: React.FC = () => {
   const [showLibrary, setShowLibrary] = useState(false);
   const [showFeedbackLibrary, setShowFeedbackLibrary] = useState(false); // NEW: Add feedback library state
   
-  // NEW: Enhanced token-related state
-  const [userTokens, setUserTokens] = useState<UserTokens | null>(null);
-  const [tokenError, setTokenError] = useState<string | null>(null);
+  // NEW: Enhanced token integration with useTokens hook
   const [showTokenDetails, setShowTokenDetails] = useState(false);
   const [writerSuggestions, setWriterSuggestions] = useState<any | null>(null);
   const [rewriteAnalysis, setRewriteAnalysis] = useState<any>(null);
+
+  // NEW: Integrated token management via useTokens hook Re-enabled - infinite loop fixed!
+  const {
+    userTokens,
+    loading: tokenLoading,
+    error: tokenError,
+    balance,
+    tier,
+    monthlyAllowance,
+    usageThisMonth,
+    daysUntilReset,
+    balanceStatus,
+    refreshTokens,
+    validateAction,
+    canAffordAction
+  } = useTokens({
+    userId: session?.user?.id || '',
+    autoRefresh: true,  // ← Re-enabled - infinite loop fixed!
+    refreshInterval: 30000, // 30 seconds when we re-enable
+    onBalanceChange: (newBalance, oldBalance) => {
+      if (newBalance !== oldBalance) {
+        console.log(`💰 Token balance updated: ${oldBalance} → ${newBalance}`);
+      }
+    },
+    onCriticalBalance: (balance) => {
+      console.warn(`⚠️ Critical token balance: ${balance} tokens remaining`);
+    }
+  });
   
   // PRESERVED: Ref to track if database test has been run
   const databaseTestRun = useRef(false);
@@ -165,43 +193,48 @@ const App: React.FC = () => {
     };
   }, []); // Empty dependency array - only run on mount/unmount
 
-  // NEW: Load token data when user changes
+  // NEW: Token state is now managed by useTokens hook automatically
+  // Only need cleanup effect for token error state when user changes
   useEffect(() => {
-    if (session?.user) {
-      loadUserTokens();
-    } else {
-      setUserTokens(null);
-      setTokenError(null);
+    // Clear any lingering token errors when user changes
+    if (!session?.user) {
+      // Token state is automatically cleared by useTokens hook
+      console.log('🔄 User signed out - token state cleared by useTokens hook');
     }
   }, [session?.user?.id]);
 
-  // NEW: Load user token data
-  const loadUserTokens = async () => {
-    if (!session?.user) return;
 
-    try {
-      const tokens = await tokenService.getUserTokenBalance(session.user.id);
-      setUserTokens(tokens);
-      setTokenError(null);
-    } catch (error) {
-      console.error('Error loading user tokens:', error);
-      setTokenError('Failed to load token information');
+  // NEW: Enhanced token error handling using useTokens hook data
+  const handleTokenError = (error: string, actionType: string) => {
+    console.error(`❌ Token error for ${actionType}:`, error);
+
+    if (error.includes('Insufficient tokens')) {
+      const cost = tokenService.getTokenCost(actionType as any);
+      console.log(`💰 Insufficient tokens for ${actionType}. Need ${cost}, have ${balance}. Consider upgrading.`);
     }
   };
 
-  // NEW: Refresh token display after operations
-  const refreshTokenDisplay = useCallback(() => {
-    if (session?.user) {
-      loadUserTokens();
+  // NEW: Enhanced token validation before actions
+  const validateTokensBeforeAction = async (actionType: string): Promise<boolean> => {
+    if (!session?.user?.id) {
+      console.warn('⚠️ No user session for token validation');
+      return false;
     }
-  }, [session?.user]);
 
-  // NEW: Handle token validation errors
-  const handleTokenError = (error: string, actionType: string) => {
-    setTokenError(error);
-    
-    if (error.includes('Insufficient tokens')) {
-      console.log(`Insufficient tokens for ${actionType}. Consider upgrade.`);
+    try {
+      const validation = await validateAction(actionType as any);
+      if (!validation.hasEnoughTokens) {
+        handleTokenError(
+          `Insufficient tokens for ${actionType}. Need ${validation.requiredTokens}, have ${validation.currentBalance}`,
+          actionType
+        );
+        return false;
+      }
+      return true;
+    } catch (error) {
+      console.error('Token validation error:', error);
+      handleTokenError('Failed to validate tokens', actionType);
+      return false;
     }
   };
 
@@ -543,8 +576,16 @@ const handleToggleFeedbackLibrary = useCallback(() => {
         userId: session?.user?.id
       });
 
-      // NEW: Token validation and processing if user is authenticated
+      // NEW: Enhanced token validation and processing with useTokens integration
       if (session?.user) {
+        // Pre-validate tokens using useTokens hook
+        const canProceed = await validateTokensBeforeAction('chunked_feedback');
+        if (!canProceed) {
+          console.log('❌ Token validation failed for chunked feedback');
+          return;
+        }
+
+        console.log('✅ Token validation passed, proceeding with chunked feedback');
         // Use token-aware service
         const result = await feedbackChunkService.generateChunkedFeedback({
           userId: session.user.id,
@@ -602,7 +643,8 @@ const handleToggleFeedbackLibrary = useCallback(() => {
             setPartialFeedback(null);
             setRewrite(null);
             setDiffLines([]);
-            refreshTokenDisplay();
+            // Token balance automatically refreshed by useTokens hook
+            console.log('✅ Chunked feedback complete, tokens automatically refreshed');
 
             console.log('✅ Token-aware progressive chunked feedback complete');
 
@@ -835,9 +877,17 @@ setProgressiveProgress({
   processingType: 'single'
 });
 
-// Token validation and processing if user is authenticated
-if (session?.user) {
-  console.log('🔒 Using token-aware processing with progressive UI...');
+      // Token validation and processing if user is authenticated
+      if (session?.user) {
+        // Pre-validate tokens using useTokens hook
+        const canProceed = await validateTokensBeforeAction('single_feedback');
+        if (!canProceed) {
+          console.log('❌ Token validation failed for single scene feedback');
+          return;
+        }
+
+        console.log('✅ Token validation passed, proceeding with single scene feedback');
+        console.log('🔒 Using token-aware processing with progressive UI...');
   
   // ✅ Show progress during token validation
   setProgressiveProgress(prev => prev ? {
@@ -897,7 +947,8 @@ if (session?.user) {
       setPartialFeedback(null);
       setRewrite(null);
       setDiffLines([]);
-      refreshTokenDisplay();
+      // Token balance automatically refreshed by useTokens hook
+      console.log('✅ Single scene feedback complete, tokens automatically refreshed');
       
       console.log('✅ Token-aware progressive single scene feedback complete');
 
@@ -1251,21 +1302,18 @@ const handleShowWriterSuggestions = async () => {
       userId: session.user.id
     });
 
-    // FIXED: Pre-validate tokens before opening the UI (optional - for better UX)
-    if (tokenService) {
-      try {
-        const tokenValidation = await writerAgentService.validateTokensForWriterAgent(session.user.id);
-        if (!tokenValidation.canProceed) {
-          handleTokenError(
-            `Insufficient tokens for Writer Agent. Need ${tokenValidation.cost}, have ${tokenValidation.currentBalance}`,
-            'writer_agent'
-          );
-          return;
-        }
-      } catch (error) {
-        console.warn('⚠️ Token validation failed, proceeding anyway:', error);
-        // Continue anyway - the component will handle token errors
+    // NEW: Enhanced token validation using useTokens hook
+    try {
+      const canProceed = await validateTokensBeforeAction('writer_agent');
+      if (!canProceed) {
+        console.log('❌ Insufficient tokens for Writer Agent');
+        return;
       }
+
+      console.log('✅ Token validation passed for Writer Agent');
+    } catch (error) {
+      console.warn('⚠️ Token validation error, showing suggestions anyway:', error);
+      // Continue anyway - the RewriteSuggestions component will handle token errors
     }
 
     // Set the mentor and show the suggestions
@@ -1373,8 +1421,17 @@ const handleShowWriterSuggestions = async () => {
         };
         
         if (currentScript && currentScript.chunks.length > 1) {
-          // NEW: Token-aware blended chunked feedback if user is authenticated
+          // NEW: Enhanced token-aware blended chunked feedback with useTokens integration
           if (session?.user) {
+            // Pre-validate tokens using useTokens hook
+            const canProceed = await validateTokensBeforeAction('blended_feedback');
+            if (!canProceed) {
+              console.log('❌ Token validation failed for blended feedback');
+              return;
+            }
+
+            console.log('✅ Token validation passed, proceeding with blended feedback');
+
             const result = await feedbackChunkService.generateChunkedFeedback({
               userId: session.user.id,
               chunks: currentScript.chunks,
@@ -1442,7 +1499,8 @@ const handleShowWriterSuggestions = async () => {
                 } as any;
 
                 setFeedback(blendedFeedback);
-                refreshTokenDisplay();
+                // Token balance automatically refreshed by useTokens hook
+                console.log('✅ Blended feedback complete, tokens automatically refreshed');
 
                 // NEW: Auto-save blended feedback to library
                 try {
@@ -1607,8 +1665,17 @@ const handleShowWriterSuggestions = async () => {
             characters: targetScene.characters
           } as ScriptScene : targetScene;
           
-          // NEW: Token-aware blended single scene feedback if user is authenticated
+          // NEW: Enhanced token-aware blended single scene feedback with useTokens integration
           if (session?.user) {
+            // Pre-validate tokens using useTokens hook
+            const canProceed = await validateTokensBeforeAction('blended_feedback');
+            if (!canProceed) {
+              console.log('❌ Token validation failed for blended single scene feedback');
+              return;
+            }
+
+            console.log('✅ Token validation passed, proceeding with blended single scene feedback');
+
             // ✅ FIX: Check cancellation before showing progress
             if (abortSignal.aborted) {
               console.log('🛑 Single scene blended feedback cancelled before token validation');
@@ -1673,7 +1740,8 @@ const handleShowWriterSuggestions = async () => {
               // ✅ FIX: Check if operation was cancelled before setting results
               if (!abortSignal.aborted) {
                 setFeedback(result.feedback);
-                refreshTokenDisplay();
+                // Token balance automatically refreshed by useTokens hook
+                console.log('✅ Blended feedback complete, tokens automatically refreshed');
 
                 // Enable writer suggestions for blended single scene feedback
                 setIsGeneratingWriterSuggestions(true);
@@ -2580,12 +2648,20 @@ const handleShowWriterSuggestions = async () => {
             </button>
 
             <div className="flex items-center gap-1 text-xs text-slate-400 justify-end">
-              {/* NEW: Token cost preview for writer suggestions */}
+              {/* NEW: Enhanced token cost preview with balance check */}
               {session?.user && (
-                <TokenCostPreview
-                  actionType="writer_agent"
-                  className="text-xs text-slate-400"
-                />
+                <div className="flex items-center gap-2">
+                  <TokenCostPreview
+                    actionType="writer_agent"
+                    className="text-xs text-slate-400"
+                  />
+                  {/* Show balance status for this action */}
+                  {canAffordAction('writer_agent') ? (
+                    <span className="text-green-400 text-xs">✓ Can afford</span>
+                  ) : (
+                    <span className="text-red-400 text-xs">⚠ Insufficient tokens</span>
+                  )}
+                </div>
               )}
             </div>
           </div>
@@ -2775,14 +2851,17 @@ const handleShowWriterSuggestions = async () => {
           </div>
           
           <div className="flex items-center gap-4">
-            {/* NEW: Enhanced Token Display */}
+            {/* NEW: Enhanced Token Display with useTokens integration */}
             {session?.user && (
               <div className="flex items-center gap-3">
-                <TokenDisplay 
+                <TokenDisplay
                   userId={session.user.id}
                   showDetailed={showTokenDetails}
                   className="text-white"
-                  onTokenUpdate={setUserTokens}
+                  onTokenUpdate={(tokens) => {
+                    console.log('💰 Token display updated:', tokens);
+                    // Token state is automatically managed by useTokens hook
+                  }}
                 />
                 <button
                   onClick={() => setShowTokenDetails(!showTokenDetails)}
@@ -2791,6 +2870,13 @@ const handleShowWriterSuggestions = async () => {
                 >
                   <BarChart3 className="h-4 w-4" />
                 </button>
+                {/* NEW: Balance status indicator */}
+                {balanceStatus === 'critical' && (
+                  <div className="flex items-center gap-1 text-red-400 text-xs">
+                    <AlertCircle className="h-3 w-3" />
+                    <span>Low tokens</span>
+                  </div>
+                )}
               </div>
             )}
             
@@ -2820,30 +2906,78 @@ const handleShowWriterSuggestions = async () => {
           </div>
         </div>
 
-        {/* NEW: Token Error Display */}
+        {/* NEW: Enhanced Token Error Display with useTokens integration */}
         {tokenError && (
           <div className="mb-6">
-            <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 flex items-center gap-2">
-              <AlertCircle className="h-4 w-4 text-red-400" />
-              <span className="text-red-300 text-sm">{tokenError}</span>
-              <button
-                onClick={() => setTokenError(null)}
-                className="ml-auto text-red-400 hover:text-red-300"
-              >
-                ×
-              </button>
+            <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="h-4 w-4 text-red-400" />
+                <span className="text-red-300 text-sm">{tokenError}</span>
+                <button
+                  onClick={() => {
+                    // Token error is automatically managed by useTokens hook
+                    console.log('🔄 Token error cleared via useTokens hook');
+                  }}
+                  className="ml-auto text-red-400 hover:text-red-300"
+                >
+                  ×
+                </button>
+              </div>
+              {/* NEW: Show current balance and upgrade suggestions */}
+              {userTokens && balance < 10 && (
+                <div className="mt-2 text-xs text-red-300">
+                  Current balance: {balance} tokens • Monthly allowance: {monthlyAllowance}
+                  {tier === 'free' && (
+                    <span className="block mt-1">
+                      Consider upgrading to Creator tier for {' '}
+                      <span className="font-medium">500 monthly tokens</span>
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}
 
-        {/* NEW: Detailed Token Display */}
+        {/* NEW: Enhanced Detailed Token Display with real-time data */}
         {showTokenDetails && userTokens && session?.user && (
           <div className="mb-6">
-            <TokenDisplay 
-              userId={session.user.id}
-              showDetailed={true}
-              className="bg-slate-800/50 backdrop-blur text-white"
-            />
+            <div className="bg-slate-800/50 backdrop-blur rounded-lg p-4 border border-slate-700">
+              <TokenDisplay
+                userId={session.user.id}
+                showDetailed={true}
+                className="text-white"
+              />
+              {/* NEW: Real-time usage insights */}
+              <div className="mt-4 pt-4 border-t border-slate-600">
+                <h4 className="text-sm font-medium text-slate-300 mb-2 flex items-center gap-2">
+                  <TrendingUp className="h-4 w-4" />
+                  Real-time Token Insights
+                </h4>
+                <div className="grid grid-cols-2 gap-4 text-xs text-slate-400">
+                  <div>
+                    <span className="block text-slate-300 font-medium">Usage This Month</span>
+                    <span>{usageThisMonth} / {monthlyAllowance} tokens</span>
+                  </div>
+                  <div>
+                    <span className="block text-slate-300 font-medium">Days Until Reset</span>
+                    <span>{daysUntilReset} days</span>
+                  </div>
+                  <div>
+                    <span className="block text-slate-300 font-medium">Balance Status</span>
+                    <span className={`capitalize ${balanceStatus === 'healthy' ? 'text-green-400' :
+                        balanceStatus === 'warning' ? 'text-yellow-400' : 'text-red-400'
+                      }`}>
+                      {balanceStatus}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="block text-slate-300 font-medium">Current Tier</span>
+                    <span className="capitalize">{tier}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         )}
         
@@ -2869,16 +3003,36 @@ const handleShowWriterSuggestions = async () => {
 
                   {/* ENHANCED: 2. Mentors Section with token integration */}
                   <div className="mt-8">
-                    {session?.user ? (
-                      <MentorSelection
-                        mentors={mentors}
-                        onSelectMentor={handleSelectMentor}
-                        onBlendMentors={handleBlendMentors}
-                        selectedMentorId={selectedMentorId}
-                        feedbackMode={feedbackMode}
-                        onFeedbackModeChange={handleFeedbackModeChange}
-                      />
-                    ) : (
+                        {session?.user ? (
+                          <div className="space-y-4">
+                            {/* Show token status for mentors */}
+                            {userTokens && balance < 20 && (
+                              <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-3">
+                                <div className="flex items-center gap-2 text-yellow-400 text-sm">
+                                  <AlertCircle className="h-4 w-4" />
+                                  <span className="font-medium">Low Token Balance</span>
+                                </div>
+                                <p className="text-yellow-300 text-xs mt-1">
+                                  You have {balance} tokens remaining. Single feedback costs 15 tokens, chunked feedback costs 25 tokens.
+                                </p>
+                                {tier === 'free' && (
+                                  <p className="text-yellow-300 text-xs mt-1">
+                                    Consider upgrading to Creator tier for 500 monthly tokens.
+                                  </p>
+                                )}
+                              </div>
+                            )}
+
+                            <MentorSelection
+                              mentors={mentors}
+                              onSelectMentor={handleSelectMentor}
+                              onBlendMentors={handleBlendMentors}
+                              selectedMentorId={selectedMentorId}
+                              feedbackMode={feedbackMode}
+                              onFeedbackModeChange={handleFeedbackModeChange}
+                            />
+                          </div>
+                        ) : (
                       <div className="bg-slate-800/50 rounded-xl p-6 border border-slate-700">
                         <div className="text-center">
                           <Coins className="h-8 w-8 text-yellow-400 mx-auto mb-2" />

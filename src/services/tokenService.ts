@@ -1,16 +1,21 @@
 // src/services/tokenService.ts
 import { supabase } from '../utils/supabaseClient';
-import { 
-  UserTokens, 
-  TokenUsage, 
-  TokenTransaction, 
-  TOKEN_COSTS, 
+import {
+  UserTokens,
+  TokenUsage,
+  TokenTransaction,
+  TOKEN_COSTS,
   TIER_LIMITS,
   PRICE_ID_TO_TIER,
-  TokenDeductionRequest, 
+  TokenDeductionRequest,
   TokenAllocationRequest,
   TokenValidationResult,
   TokenUsageStats,
+  UserAnalytics,
+  SubscriptionStatus,
+  BatchValidationResult,
+  TokenUpdateCallback,
+  UnsubscribeFunction,
   isValidActionType,
   isValidTransactionType,
   getTierAllowance
@@ -19,7 +24,7 @@ import {
 // Development mode detection
 const isDevelopment = () => {
   return (
-    import.meta.env.DEV || 
+    import.meta.env.DEV ||
     import.meta.env.MODE === 'development' ||
     import.meta.env.VITE_DEV_MODE === 'true'
   );
@@ -35,7 +40,7 @@ const isTestUser = (userId: string) => {
     import.meta.env.VITE_TEST_USER_ID,
     'test-user-dev'
   ].filter(Boolean);
-  
+
   return testUserIds.includes(userId);
 };
 
@@ -114,10 +119,10 @@ export class TokenService {
         tier: 'pro' // Grant pro tier access
       };
     }
-    
+
     try {
       const userTokens = await this.getUserTokenBalance(userId);
-      
+
       if (!userTokens) {
         throw new Error('User token information not found');
       }
@@ -143,7 +148,7 @@ export class TokenService {
    */
   async deductTokens(request: TokenDeductionRequest): Promise<boolean> {
     const { userId, tokensToDeduct, actionType, scriptId, mentorId, sceneId } = request;
-    
+
     if (shouldBypassTokens(userId)) {
       console.log(`🚀 Development bypass: Skipping deduction of ${tokensToDeduct} tokens for ${actionType}`);
       return true;
@@ -197,13 +202,13 @@ export class TokenService {
    * Add tokens to user account (for admin/bonus purposes)
    */
   async addTokens(request: TokenAllocationRequest): Promise<boolean> {
-    const { 
-      userId, 
-      tokensToAdd, 
-      transactionType, 
-      stripePaymentId, 
-      stripeSubscriptionId, 
-      description 
+    const {
+      userId,
+      tokensToAdd,
+      transactionType,
+      stripePaymentId,
+      stripeSubscriptionId,
+      description
     } = request;
 
     try {
@@ -265,61 +270,168 @@ export class TokenService {
   }
 
   /**
-   * Get user's token usage statistics
+   * ENHANCED: Get detailed usage statistics for a user
    */
-  async getTokenUsageStats(userId: string): Promise<TokenUsageStats> {
+  async getUserUsageStats(userId: string): Promise<TokenUsageStats> {
     try {
-      // Get all usage records for the user
-      const { data: usage, error } = await supabase
+      // Get current user tokens for baseline
+      const userTokens = await this.getUserTokenBalance(userId);
+      if (!userTokens) {
+        throw new Error('User token data not found');
+      }
+
+      // Calculate days since last reset
+      const lastReset = new Date(userTokens.last_reset_date);
+      const now = new Date();
+      const daysSinceReset = Math.floor((now.getTime() - lastReset.getTime()) / (1000 * 60 * 60 * 24));
+      const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+      const daysUntilReset = Math.max(0, daysInMonth - daysSinceReset);
+
+      // Fetch usage data for current month (from last reset)
+      const monthStart = new Date(lastReset);
+      const { data: usageData, error } = await supabase
         .from('token_usage')
-        .select('*')
+        .select('action_type, tokens_used, created_at')
         .eq('user_id', userId)
+        .gte('created_at', monthStart.toISOString())
         .order('created_at', { ascending: false });
 
-      if (error) throw error;
+      if (error) {
+        console.warn('Could not fetch detailed usage stats:', error);
+        // Return basic stats from user tokens
+        const usageThisMonth = userTokens.monthly_allowance - userTokens.balance;
+        return {
+          totalUsed: usageThisMonth,
+          usageByAction: {} as Record<TokenUsage['action_type'], number>,
+          usageThisMonth,
+          averageDaily: daysSinceReset > 0 ? usageThisMonth / daysSinceReset : 0,
+          daysUntilReset
+        };
+      }
 
-      // Calculate stats
-      const totalUsed = usage?.reduce((sum, record) => sum + record.tokens_used, 0) || 0;
-      
-      const usageByAction = (usage || []).reduce((acc, record) => {
-        acc[record.action_type] = (acc[record.action_type] || 0) + record.tokens_used;
+      // Process usage data
+      const totalUsed = usageData.reduce((sum, record) => sum + record.tokens_used, 0);
+      const usageByAction = usageData.reduce((acc, record) => {
+        const actionType = record.action_type as TokenUsage['action_type'];
+        acc[actionType] = (acc[actionType] || 0) + record.tokens_used;
         return acc;
       }, {} as Record<TokenUsage['action_type'], number>);
 
-      // Calculate this month's usage
-      const startOfMonth = new Date();
-      startOfMonth.setDate(1);
-      startOfMonth.setHours(0, 0, 0, 0);
-
-      const usageThisMonth = (usage || [])
-        .filter(record => new Date(record.created_at) >= startOfMonth)
-        .reduce((sum, record) => sum + record.tokens_used, 0);
-
-      // Calculate average daily usage (last 30 days)
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
-      const recentUsage = (usage || []).filter(record => new Date(record.created_at) >= thirtyDaysAgo);
-      const averageDaily = recentUsage.length > 0 ? 
-        recentUsage.reduce((sum, record) => sum + record.tokens_used, 0) / 30 : 0;
-
-      // Calculate days until reset (assuming monthly reset)
-      const nextMonth = new Date();
-      nextMonth.setMonth(nextMonth.getMonth() + 1);
-      nextMonth.setDate(1);
-      nextMonth.setHours(0, 0, 0, 0);
-      const daysUntilReset = Math.ceil((nextMonth.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+      const averageDaily = daysSinceReset > 0 ? totalUsed / daysSinceReset : 0;
 
       return {
         totalUsed,
         usageByAction,
-        usageThisMonth,
-        averageDaily: Math.round(averageDaily * 100) / 100,
+        usageThisMonth: totalUsed,
+        averageDaily,
         daysUntilReset
       };
+
     } catch (error) {
-      console.error('Error fetching token usage stats:', error);
+      console.error('Error fetching usage statistics:', error);
       throw new Error('Failed to fetch usage statistics');
+    }
+  }
+
+  /**
+   * NEW: Get comprehensive analytics for dashboard
+   */
+  async getUserAnalytics(userId: string): Promise<UserAnalytics> {
+    try {
+      const userTokens = await this.getUserTokenBalance(userId);
+      if (!userTokens) {
+        throw new Error('User token data not found');
+      }
+
+      const stats = await this.getUserUsageStats(userId);
+
+      // Current month data
+      const used = stats.usageThisMonth;
+      const remaining = userTokens.balance;
+      const percentage = Math.round((used / userTokens.monthly_allowance) * 100);
+
+      // Fetch recent usage (last 7 days)
+      const weekAgo = new Date();
+      weekAgo.setDate(weekAgo.getDate() - 7);
+
+      const { data: recentData } = await supabase
+        .from('token_usage')
+        .select('action_type, tokens_used, created_at')
+        .eq('user_id', userId)
+        .gte('created_at', weekAgo.toISOString())
+        .order('created_at', { ascending: false })
+        .limit(20);
+
+      const recentUsage = (recentData || []).map(record => ({
+        date: record.created_at,
+        tokensUsed: record.tokens_used,
+        actionType: record.action_type as TokenUsage['action_type']
+      }));
+
+      // Project end-of-month usage
+      const dailyAverage = stats.averageDaily;
+      const projectedTotal = used + (dailyAverage * stats.daysUntilReset);
+      const willExceedLimit = projectedTotal > userTokens.monthly_allowance;
+
+      // Recommend tier upgrade if projected to exceed
+      let recommendedTier: UserTokens['tier'] | undefined;
+      if (willExceedLimit) {
+        if (userTokens.tier === 'free' && projectedTotal <= 500) {
+          recommendedTier = 'creator';
+        } else if (userTokens.tier === 'creator' && projectedTotal <= 1500) {
+          recommendedTier = 'pro';
+        }
+      }
+
+      // Calculate efficiency metrics
+      const actionCounts = Object.entries(stats.usageByAction).map(([action, tokens]) => ({
+        action: action as TokenUsage['action_type'],
+        tokens,
+        count: Math.ceil(tokens / TOKEN_COSTS[action as TokenUsage['action_type']])
+      }));
+
+      const tokensPerAction = actionCounts.reduce((acc, { action, tokens, count }) => {
+        acc[action] = count > 0 ? tokens / count : 0;
+        return acc;
+      }, {} as Record<TokenUsage['action_type'], number>);
+
+      const mostUsedAction = actionCounts.sort((a, b) => b.tokens - a.tokens)[0]?.action || 'single_feedback';
+
+      // Generate recommendations
+      const recommendations: string[] = [];
+      if (willExceedLimit && recommendedTier) {
+        recommendations.push(`Consider upgrading to ${recommendedTier} tier for more tokens`);
+      }
+      if (dailyAverage > userTokens.monthly_allowance / 30) {
+        recommendations.push('Your usage is above average - consider optimizing feedback requests');
+      }
+      if (stats.usageByAction.blended_feedback > stats.usageByAction.single_feedback) {
+        recommendations.push('You use blended feedback frequently - great for comprehensive insights!');
+      }
+
+      return {
+        currentMonth: {
+          used,
+          remaining,
+          percentage,
+          tier: userTokens.tier
+        },
+        recentUsage,
+        projectedUsage: {
+          endOfMonth: Math.round(projectedTotal),
+          willExceedLimit,
+          recommendedTier
+        },
+        efficiency: {
+          tokensPerAction,
+          mostUsedAction,
+          recommendations
+        }
+      };
+
+    } catch (error) {
+      console.error('Error fetching user analytics:', error);
+      throw new Error('Failed to fetch analytics data');
     }
   }
 
@@ -402,7 +514,7 @@ export class TokenService {
         }
       };
     }
-    
+
     try {
       const { canProceed, validation, cost } = await this.validateAndPrepareDeduction(
         userId, actionType, scriptId, mentorId, sceneId
@@ -421,11 +533,11 @@ export class TokenService {
         sceneId
       });
 
-      return { 
-        success: deductionSuccess, 
-        validation: deductionSuccess ? 
-          { ...validation, currentBalance: validation.currentBalance - cost } : 
-          validation 
+      return {
+        success: deductionSuccess,
+        validation: deductionSuccess ?
+          { ...validation, currentBalance: validation.currentBalance - cost } :
+          validation
       };
     } catch (error) {
       console.error('Error processing token transaction:', error);
@@ -543,7 +655,7 @@ export class TokenService {
       const batchSize = 10;
       for (let i = 0; i < usersToReset.length; i += batchSize) {
         const batch = usersToReset.slice(i, i + batchSize);
-        
+
         const resetPromises = batch.map(async (user) => {
           try {
             const success = await this.resetMonthlyTokens(user.user_id);
@@ -559,7 +671,7 @@ export class TokenService {
         });
 
         await Promise.all(resetPromises);
-        
+
         // Small delay between batches
         if (i + batchSize < usersToReset.length) {
           await new Promise(resolve => setTimeout(resolve, 1000));
@@ -585,10 +697,10 @@ export class TokenService {
 
       const lastReset = new Date(userTokens.last_reset_date);
       const now = new Date();
-      
+
       // Check if more than 30 days have passed
       const daysSinceReset = Math.floor((now.getTime() - lastReset.getTime()) / (1000 * 60 * 60 * 24));
-      
+
       return daysSinceReset >= 30;
 
     } catch (error) {
@@ -603,9 +715,9 @@ export class TokenService {
   async forceMonthlyReset(userId: string, reason?: string): Promise<boolean> {
     try {
       console.log(`🔧 Admin force reset for user: ${userId}, reason: ${reason || 'Manual admin reset'}`);
-      
+
       const success = await this.resetMonthlyTokens(userId);
-      
+
       if (success && reason) {
         // Log admin action
         const { error: logError } = await supabase
@@ -627,6 +739,164 @@ export class TokenService {
     } catch (error) {
       console.error('Error in force monthly reset:', error);
       return false;
+    }
+  }
+
+  /**
+   * NEW: Check subscription status and tier permissions
+   */
+  async getSubscriptionStatus(userId: string): Promise<SubscriptionStatus> {
+    try {
+      const userTokens = await this.getUserTokenBalance(userId);
+      if (!userTokens) {
+        throw new Error('User subscription data not found');
+      }
+
+      // Check for active Stripe subscription
+      const { data: subscription } = await supabase
+        .from('stripe_subscriptions')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('status', 'active')
+        .single();
+
+      const hasActiveSubscription = userTokens.tier !== 'free' && !!subscription;
+
+      // Define tier features
+      const tierFeatures = {
+        free: {
+          blendedFeedback: false,
+          writerAgent: false,
+          chunkedFeedback: false,
+          premiumMentors: false,
+          prioritySupport: false
+        },
+        creator: {
+          blendedFeedback: true,
+          writerAgent: true,
+          chunkedFeedback: true,
+          premiumMentors: true,
+          prioritySupport: false
+        },
+        pro: {
+          blendedFeedback: true,
+          writerAgent: true,
+          chunkedFeedback: true,
+          premiumMentors: true,
+          prioritySupport: true
+        }
+      };
+
+      return {
+        hasActiveSubscription,
+        tier: userTokens.tier,
+        billingCycle: subscription?.billing_cycle || 'monthly',
+        nextBillingDate: subscription?.current_period_end,
+        canceledAt: subscription?.canceled_at,
+        features: tierFeatures[userTokens.tier]
+      };
+
+    } catch (error) {
+      console.error('Error fetching subscription status:', error);
+      throw new Error('Failed to fetch subscription status');
+    }
+  }
+
+  /**
+   * NEW: Real-time token balance with WebSocket-like updates
+   */
+  async subscribeToTokenUpdates(
+    userId: string,
+    callback: TokenUpdateCallback
+  ): Promise<UnsubscribeFunction> {
+    try {
+      // Setup real-time subscription using Supabase real-time
+      const subscription = supabase
+        .channel(`token_updates_${userId}`)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'user_tokens',
+            filter: `user_id=eq.${userId}`
+          },
+          async (payload) => {
+            console.log('Token balance updated:', payload);
+            // Fetch fresh data and notify callback
+            try {
+              const updatedTokens = await this.getUserTokenBalance(userId);
+              if (updatedTokens) {
+                callback(updatedTokens);
+              }
+            } catch (error) {
+              console.error('Error fetching updated tokens:', error);
+            }
+          }
+        )
+        .subscribe();
+
+      // Return unsubscribe function
+      return () => {
+        supabase.removeChannel(subscription);
+      };
+
+    } catch (error) {
+      console.error('Error setting up token subscription:', error);
+      // Return no-op unsubscribe function
+      return () => {};
+    }
+  }
+
+  /**
+   * NEW: Batch token validation for multiple actions
+   */
+  async validateMultipleActions(
+    userId: string,
+    actions: Array<{
+      actionType: TokenUsage['action_type'];
+      quantity?: number;
+    }>
+  ): Promise<BatchValidationResult> {
+    try {
+      const userTokens = await this.getUserTokenBalance(userId);
+      if (!userTokens) {
+        throw new Error('User token data not found');
+      }
+
+      let totalCost = 0;
+      const insufficientActions: Array<{
+        actionType: TokenUsage['action_type'];
+        required: number;
+        shortfall: number;
+      }> = [];
+
+      // Calculate total cost and check each action
+      for (const action of actions) {
+        const cost = TOKEN_COSTS[action.actionType] * (action.quantity || 1);
+        totalCost += cost;
+
+        if (userTokens.balance < cost) {
+          insufficientActions.push({
+            actionType: action.actionType,
+            required: cost,
+            shortfall: cost - userTokens.balance
+          });
+        }
+      }
+
+      const canAffordAll = userTokens.balance >= totalCost && insufficientActions.length === 0;
+
+      return {
+        canAffordAll,
+        totalCost,
+        currentBalance: userTokens.balance,
+        insufficientActions
+      };
+
+    } catch (error) {
+      console.error('Error validating multiple actions:', error);
+      throw new Error('Failed to validate multiple actions');
     }
   }
 }
