@@ -1,5 +1,6 @@
-// src/App.tsx - Complete version preserving ALL existing functionality + comprehensive token integration
+// src/App.tsx - Complete version preserving ALL existing functionality + comprehensive token integration + ROUTING
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { BrowserRouter as Router, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from './utils/supabaseClient';
 import { supabaseScriptService } from './services/supabaseScriptService';
 import Auth from './components/Auth';
@@ -19,7 +20,126 @@ import { feedbackChunkService } from './services/feedbackChunkService';
 import { writerAgentService } from './services/writerAgentService';
 import { rewriteEvaluationService } from './services/rewriteEvaluationService';
 import { TokenValidationMiddleware } from './utils/tokenValidationMiddleware';
+// NEW: Routing imports for pricing and subscription management
+import PricingPage from './components/PricingPage';
+import SubscriptionManagement from './components/SubscriptionManagement';
+import UpgradePrompt, { 
+  LowTokensPrompt, 
+  InsufficientTokensPrompt, 
+  PremiumFeaturePrompt 
+} from './components/UpgradePrompt';
 import { mentors } from './data/mentors';
+
+// NEW: Navigation Header Component
+const NavigationHeader: React.FC<{
+  session: any;
+  userTokens: any;
+  onSignOut: () => void;
+}> = ({ session, userTokens, onSignOut }) => {
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const isActivePage = (path: string) => {
+    return location.pathname === path;
+  };
+
+  return (
+    <header className="bg-slate-800/95 backdrop-blur-sm border-b border-slate-700 sticky top-0 z-50">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="flex items-center justify-between h-16">
+          {/* Logo and Navigation */}
+          <div className="flex items-center gap-8">
+            <button
+              onClick={() => navigate('/')}
+              className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+            >
+              <div className="w-8 h-8 bg-gradient-to-br from-blue-400 to-purple-500 rounded-lg flex items-center justify-center">
+                <span className="text-white font-bold text-sm">SM</span>
+              </div>
+              <span className="text-white font-semibold text-lg">Script Mentor</span>
+            </button>
+
+            {/* Navigation Links */}
+            <nav className="hidden md:flex items-center gap-6">
+              <button
+                onClick={() => navigate('/')}
+                className={`text-sm font-medium transition-colors ${
+                  isActivePage('/') 
+                    ? 'text-blue-400' 
+                    : 'text-slate-300 hover:text-white'
+                }`}
+              >
+                Mentor
+              </button>
+              
+              <button
+                onClick={() => navigate('/pricing')}
+                className={`text-sm font-medium transition-colors ${
+                  isActivePage('/pricing') 
+                    ? 'text-blue-400' 
+                    : 'text-slate-300 hover:text-white'
+                }`}
+              >
+                Pricing
+              </button>
+
+              {session?.user && (
+                <button
+                  onClick={() => navigate('/subscription')}
+                  className={`text-sm font-medium transition-colors ${
+                    isActivePage('/subscription') 
+                      ? 'text-blue-400' 
+                      : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  Subscription
+                </button>
+              )}
+            </nav>
+          </div>
+
+          {/* User Section */}
+          <div className="flex items-center gap-4">
+            {session?.user ? (
+              <>
+                {/* Token Display */}
+                {userTokens && (
+                  <div className="hidden sm:flex items-center gap-2 bg-slate-700/50 rounded-lg px-3 py-2">
+                    <Coins className="h-4 w-4 text-yellow-400" />
+                    <span className="text-sm font-medium text-white">
+                      {userTokens.balance}
+                    </span>
+                    <span className="text-xs text-slate-400">tokens</span>
+                  </div>
+                )}
+
+                {/* User Menu */}
+                <div className="relative">
+                  <button
+                    onClick={onSignOut}
+                    className="flex items-center gap-2 text-slate-300 hover:text-white transition-colors"
+                  >
+                    <div className="w-8 h-8 bg-slate-600 rounded-full flex items-center justify-center">
+                      <span className="text-sm font-medium">
+                        {session.user.email?.charAt(0).toUpperCase()}
+                      </span>
+                    </div>
+                    <ArrowDown className="h-4 w-4" />
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="text-slate-300 text-sm">
+                Sign in to get started
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </header>
+  );
+};
+
 import { 
   ScriptScene, 
   Feedback, 
@@ -40,7 +160,7 @@ import { ScriptChunker } from './utils/scriptChunker';
 import { ProcessingProgress as ProgressiveProgressType, progressiveFeedbackService } from './services/progressiveFeedbackService';
 import { backendApiService } from './services/backendApiService';
 import { CharacterDataNormalizer } from './utils/characterDataNormalizer';
-import { BookOpenCheck, Files, Activity, BookText, BookOpen, BookMarked, BarChart3, Sparkles, ArrowDown, LogOut, Layers, FileText, RefreshCw, AlertCircle, Coins, Crown, Zap, TrendingUp } from 'lucide-react';
+import { BookOpenCheck, Files, Activity, BookText, BookOpen, BookMarked, BarChart3, Sparkles, ArrowDown, LogOut, Layers, FileText, RefreshCw, AlertCircle, Coins, Crown, Zap, TrendingUp, CheckCircle, ChevronDown } from 'lucide-react';
 import { processSceneText } from './utils/scriptFormatter';
 import ScriptLibrary from './components/ScriptLibrary';
 import FeedbackLibrary from './components/FeedbackLibrary'; // NEW: Add FeedbackLibrary component
@@ -69,7 +189,8 @@ const LibraryButton: React.FC<{
   </button>
 ));
 
-const App: React.FC = () => {
+// NEW: Main App Content Component (preserves all existing app logic)
+const AppContent: React.FC = () => {
   // PRESERVED: All existing core state
   const [session, setSession] = useState<any>(null);
   const [selectedMentorId, setSelectedMentorId] = useState<string>('tony-gilroy');
@@ -2820,7 +2941,7 @@ const handleShowWriterSuggestions = async () => {
           }}
         />
       )}
-      
+
       {/* PRESERVED: SIMPLIFIED script loading state when not generating feedback */}
       {isLoadingScript && !isGeneratingFeedback && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
@@ -2833,9 +2954,9 @@ const handleShowWriterSuggestions = async () => {
           </div>
         </div>
       )}
-      
+
       <main className="container-fluid mx-auto px-4 py-8 max-w-[2400px]">
-        {/* ENHANCED: Header with complete token integration */}
+        {/* ENHANCED: Simplified header for main content area */}
         <div className="mb-8 flex justify-between items-center">
           <div className="flex flex-col">
             <h2 className="text-2xl font-bold flex items-center gap-2">
@@ -2849,7 +2970,7 @@ const handleShowWriterSuggestions = async () => {
               )}
             </h2>
           </div>
-          
+
           <div className="flex items-center gap-4">
             {/* NEW: Enhanced Token Display with useTokens integration */}
             {session?.user && (
@@ -2879,7 +3000,7 @@ const handleShowWriterSuggestions = async () => {
                 )}
               </div>
             )}
-            
+
             <LibraryButton
               showLibrary={showLibrary}
               onToggle={handleToggleLibrary}
@@ -2887,21 +3008,13 @@ const handleShowWriterSuggestions = async () => {
             <button
               onClick={handleToggleFeedbackLibrary}
               className={`flex items-center gap-2 px-4 py-2 rounded-md transition-all duration-200 ease-in-out transform text-white library-button ${showFeedbackLibrary
-                  ? 'bg-green-600 hover:bg-green-500 hover:scale-105 active:scale-95'
-                  : 'bg-slate-700 hover:bg-slate-600 hover:scale-105 active:scale-95'
+                ? 'bg-green-600 hover:bg-green-500 hover:scale-105 active:scale-95'
+                : 'bg-slate-700 hover:bg-slate-600 hover:scale-105 active:scale-95'
                 }`}
               type="button"
             >
               {showFeedbackLibrary ? <BookMarked className="h-5 w-5" /> : <BookOpen className="h-5 w-5" />}
               <span className="font-medium">{showFeedbackLibrary ? 'Hide Feedback Library' : 'Feedback Library'}</span>
-            </button>
-            <button
-              onClick={handleSignOut}
-              className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-md transition-colors"
-              type="button"
-            >
-              <LogOut className="h-5 w-5" />
-              Sign Out
             </button>
           </div>
         </div>
@@ -3061,12 +3174,181 @@ const handleShowWriterSuggestions = async () => {
 
               <div className="lg:flex-1">
                 {renderScriptWorkspace()}
+
+                {/* NEW: Contextual upgrade prompts */}
+                {userTokens && balance < 10 && (
+                  <div className="mt-6">
+                    <LowTokensPrompt
+                      onClose={() => {
+                        console.log('🔄 Upgrade prompt closed');
+                      }}
+                    />
+                  </div>
+                )}
               </div>
             </div>
           </div>
         )}
       </main>
     </div>
+  );
+};
+
+// NEW: Router-enabled App Component
+const App: React.FC = () => {
+  return (
+    <Router>
+      <div className="min-h-screen bg-slate-900">
+        <Routes>
+          {/* Main App Route */}
+          <Route path="/" element={<AppWithNavigation />} />
+          
+          {/* Pricing Page Route */}
+          <Route path="/pricing" element={<PricingPageWithNavigation />} />
+          
+          {/* Subscription Management Route */}
+          <Route path="/subscription" element={<SubscriptionWithNavigation />} />
+          
+          {/* Success Page Route */}
+          <Route path="/success" element={<SuccessPageWithNavigation />} />
+        </Routes>
+      </div>
+    </Router>
+  );
+};
+
+// NEW: Wrapper Components for Different Routes
+const AppWithNavigation: React.FC = () => {
+  const [session, setSession] = useState<any>(null);
+  const [userTokens, setUserTokens] = useState<any>(null);
+
+  useEffect(() => {
+    const getSession = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      setSession(session);
+    };
+    getSession();
+  }, []);
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+  };
+
+  return (
+    <>
+      <NavigationHeader
+        session={session}
+        userTokens={userTokens}
+        onSignOut={handleSignOut}
+      />
+      <AppContent />
+    </>
+  );
+};
+
+const PricingPageWithNavigation: React.FC = () => {
+  const { userTokens, session } = useTokens({ 
+    userId: '', 
+    autoRefresh: false 
+  });
+  
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+  };
+
+  return (
+    <>
+      <NavigationHeader 
+        session={session} 
+        userTokens={userTokens} 
+        onSignOut={handleSignOut} 
+      />
+      <PricingPage />
+    </>
+  );
+};
+
+const SubscriptionWithNavigation: React.FC = () => {
+  const { userTokens, session } = useTokens({ 
+    userId: '', 
+    autoRefresh: false 
+  });
+  const navigate = useNavigate();
+  
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    navigate('/');
+  };
+
+  // Redirect to pricing if not authenticated
+  React.useEffect(() => {
+    if (!session?.user) {
+      navigate('/pricing');
+    }
+  }, [session, navigate]);
+
+  if (!session?.user) {
+    return null; // Will redirect
+  }
+
+  return (
+    <>
+      <NavigationHeader 
+        session={session} 
+        userTokens={userTokens} 
+        onSignOut={handleSignOut} 
+      />
+      <SubscriptionManagement />
+    </>
+  );
+};
+
+const SuccessPageWithNavigation: React.FC = () => {
+  const { userTokens, session } = useTokens({ 
+    userId: '', 
+    autoRefresh: false 
+  });
+  const navigate = useNavigate();
+  
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+  };
+
+  return (
+    <>
+      <NavigationHeader 
+        session={session} 
+        userTokens={userTokens} 
+        onSignOut={handleSignOut} 
+      />
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <div className="max-w-md mx-auto text-center">
+          <div className="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-6">
+            <CheckCircle className="h-8 w-8 text-white" />
+          </div>
+          <h1 className="text-2xl font-bold text-white mb-4">
+            Payment Successful!
+          </h1>
+          <p className="text-slate-300 mb-8">
+            Your subscription has been activated. You can now access all premium features.
+          </p>
+          <div className="space-y-3">
+            <button
+              onClick={() => navigate('/')}
+              className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3 px-6 rounded-lg transition-colors"
+            >
+              Start Writing
+            </button>
+            <button
+              onClick={() => navigate('/subscription')}
+              className="w-full bg-slate-700 hover:bg-slate-600 text-white font-semibold py-3 px-6 rounded-lg transition-colors"
+            >
+              Manage Subscription
+            </button>
+          </div>
+        </div>
+      </div>
+    </>
   );
 };
 
