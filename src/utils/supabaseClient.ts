@@ -40,77 +40,123 @@ console.log('🌍 Environment Detection:', {
   mode: import.meta.env.MODE
 });
 
-// Enhanced Supabase client configuration
-const createEnhancedSupabaseClient = () => {
-  // For WebContainer environments, we need special handling
-  if (isWebContainer()) {
-    console.log('🔧 WebContainer detected - applying CORS workarounds');
-    
-    // Option 1: Try with modified fetch that handles CORS
-    const customFetch = async (url: string | URL | Request, options?: RequestInit) => {
-      try {
-        // First, try the normal fetch
-        return await fetch(url, options);
-      } catch (error: any) {
-        // If CORS error, try with a proxy (only for development)
-        if (error.message?.includes('CORS') || error.message?.includes('Failed to fetch')) {
-          console.log('🔄 CORS error detected, attempting proxy solution...');
-          
-          const urlString = url.toString();
-          
-          // Don't proxy non-Supabase URLs
-          if (!urlString.includes('.supabase.co')) {
-            throw error;
-          }
-          
-          try {
-            // Try with allorigins proxy (more reliable than cors-anywhere)
-            const proxyUrl = `${BACKUP_CORS_PROXY}${encodeURIComponent(urlString)}`;
-            const proxyResponse = await fetch(proxyUrl, {
-              ...options,
-              headers: {
-                ...options?.headers,
-                'X-Requested-With': 'XMLHttpRequest'
-              }
-            });
-            
-            if (proxyResponse.ok) {
-              console.log('✅ Proxy request successful');
-              return proxyResponse;
-            }
-          } catch (proxyError) {
-            console.warn('❌ Proxy request failed:', proxyError);
-          }
-        }
-        
-        throw error;
-      }
-    };
+// Enhanced singleton implementation
+class SupabaseClientSingleton {
+  private static instance: any = null;
+  private static isCreating: boolean = false;
 
-    return createClient(supabaseUrl, supabaseAnonKey, {
-      global: {
-        fetch: customFetch
-      },
-      auth: {
-        persistSession: true,
-        autoRefreshToken: true,
-        detectSessionInUrl: true
+  public static getInstance() {
+    // Prevent multiple simultaneous creations
+    if (this.isCreating) {
+      throw new Error('Supabase client is already being created');
+    }
+
+    if (!this.instance) {
+      this.isCreating = true;
+
+      try {
+        console.log('🔐 Creating new Supabase client instance...');
+
+        // For WebContainer environments, we need special handling
+        if (isWebContainer()) {
+          console.log('🔧 WebContainer detected - applying CORS workarounds');
+
+          // Option 1: Try with modified fetch that handles CORS
+          const customFetch = async (url: string | URL | Request, options?: RequestInit) => {
+            try {
+              // First, try the normal fetch
+              return await fetch(url, options);
+            } catch (error: any) {
+              // If CORS error, try with a proxy (only for development)
+              if (error.message?.includes('CORS') || error.message?.includes('Failed to fetch')) {
+                console.log('🔄 CORS error detected, attempting proxy solution...');
+
+                const urlString = url.toString();
+
+                // Don't proxy non-Supabase URLs
+                if (!urlString.includes('.supabase.co')) {
+                  throw error;
+                }
+
+                try {
+                  // Try with allorigins proxy (more reliable than cors-anywhere)
+                  const proxyUrl = `${BACKUP_CORS_PROXY}${encodeURIComponent(urlString)}`;
+                  const proxyResponse = await fetch(proxyUrl, {
+                    ...options,
+                    headers: {
+                      ...options?.headers,
+                      'X-Requested-With': 'XMLHttpRequest'
+                    }
+                  });
+
+                  if (proxyResponse.ok) {
+                    console.log('✅ Proxy request successful');
+                    return proxyResponse;
+                  }
+                } catch (proxyError) {
+                  console.warn('❌ Proxy request failed:', proxyError);
+                }
+              }
+
+              throw error;
+            }
+          };
+
+          this.instance = createClient(supabaseUrl, supabaseAnonKey, {
+            global: {
+              fetch: customFetch
+            },
+            auth: {
+              persistSession: true,
+              autoRefreshToken: true,
+              detectSessionInUrl: true
+            }
+          });
+        } else {
+          // Standard configuration for other environments
+          this.instance = createClient(supabaseUrl, supabaseAnonKey, {
+            auth: {
+              persistSession: true,
+              autoRefreshToken: true,
+              detectSessionInUrl: true
+            }
+          });
+        }
+
+        console.log('✅ Supabase client instance created successfully');
+
+      } finally {
+        this.isCreating = false;
       }
-    });
+    }
+
+    return this.instance;
   }
 
-  // Standard configuration for other environments
-  return createClient(supabaseUrl, supabaseAnonKey, {
-    auth: {
-      persistSession: true,
-      autoRefreshToken: true,
-      detectSessionInUrl: true
-    }
-  });
-};
+  // Method to reset instance (useful for testing)
+  public static reset() {
+    this.instance = null;
+    this.isCreating = false;
+  }
+}
 
-// Create the enhanced Supabase client
-export const supabase = createEnhancedSupabaseClient();
+// Create the enhanced Supabase client (true singleton)
+export const supabase = SupabaseClientSingleton.getInstance();
+
+// Debug logging to verify singleton behavior
+if (typeof window !== 'undefined') {
+  // Store reference to track instances
+  if (!(window as any).__supabaseInstanceCount) {
+    (window as any).__supabaseInstanceCount = 0;
+  }
+  (window as any).__supabaseInstanceCount++;
+  
+  console.log('🔍 Supabase client instances created:', (window as any).__supabaseInstanceCount);
+  
+  if ((window as any).__supabaseInstanceCount > 1) {
+    console.warn('⚠️ Multiple Supabase client instances detected!');
+  }
+}
 
 // Test connection function
 export const testSupabaseConnection = async () => {

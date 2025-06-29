@@ -1,13 +1,8 @@
 // src/services/subscriptionService.ts
 // Comprehensive subscription management service for Script Mentor
 
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '../utils/supabaseClient';
 import { UserTokens, TIER_LIMITS, PRICE_ID_TO_TIER } from '../types/tokens';
-
-// Initialize Supabase client
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseServiceKey = import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY;
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
 export interface SubscriptionInfo {
   id: string;

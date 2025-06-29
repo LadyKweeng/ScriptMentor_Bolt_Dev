@@ -14,6 +14,9 @@ import ScriptNavigationPanel from './components/ScriptNavigationPanel';
 import ProgressiveProcessingProgress from './components/ProgressiveProcessingProgress';
 // NEW: Token integration components and services
 import { TokenDisplay, TokenValidationGuard, TokenCostPreview } from './components/TokenDisplay';
+import { TokenDashboard } from './components/TokenDashboard';
+import { UsageChart } from './components/UsageChart';
+import { UsageInsights } from './components/UsageInsights';
 import { tokenService } from './services/tokenService';
 import { aiFeedbackService } from './services/aiFeedbackService';
 import { feedbackChunkService } from './services/feedbackChunkService';
@@ -259,6 +262,9 @@ const AppContent: React.FC = () => {
     }
   });
   
+  // NEW: Dashboard state
+  const [showDashboard, setShowDashboard] = useState(false);
+  
   // PRESERVED: Ref to track if database test has been run
   const databaseTestRun = useRef(false);
   
@@ -371,6 +377,22 @@ const AppContent: React.FC = () => {
     setRewriteAnalysis(null);
   };
 
+  // NEW: Dashboard handlers
+  const handleToggleDashboard = useCallback(() => {
+    setShowDashboard(prev => !prev);
+    // Close other panels when opening dashboard
+    if (!showDashboard) {
+      setShowLibrary(false);
+      setShowFeedbackLibrary(false);
+    }
+  }, [showDashboard]);
+
+  const handleUpgradeFromDashboard = useCallback(() => {
+    setShowDashboard(false);
+    // Navigation would be handled here if using router
+    console.log('🚀 Navigate to pricing page');
+  }, []);
+
 // SIMPLIFIED: Direct toggle handlers that allow seamless switching
 const handleToggleLibrary = useCallback(() => {
   console.log('📚 Toggling script library');
@@ -378,9 +400,10 @@ const handleToggleLibrary = useCallback(() => {
     const newState = !prev;
     console.log('📚 New script library state:', newState);
     
-    // If opening script library, automatically close feedback library
+    // If opening script library, automatically close other panels
     if (newState) {
       setShowFeedbackLibrary(false);
+      setShowDashboard(false);
     }
     
     return newState;
@@ -393,9 +416,10 @@ const handleToggleFeedbackLibrary = useCallback(() => {
     const newState = !prev;
     console.log('📚 New feedback library state:', newState);
     
-    // If opening feedback library, automatically close script library
+    // If opening feedback library, automatically close other panels
     if (newState) {
       setShowLibrary(false);
+      setShowDashboard(false);
     }
     
     return newState;
@@ -3001,6 +3025,19 @@ const handleShowWriterSuggestions = async () => {
               </div>
             )}
 
+            <button
+              onClick={handleToggleDashboard}
+              className={`flex items-center gap-2 px-4 py-2 rounded-md transition-all duration-200 ease-in-out transform text-white ${
+                showDashboard
+                  ? 'bg-blue-600 hover:bg-blue-500 hover:scale-105 active:scale-95'
+                  : 'bg-slate-700 hover:bg-slate-600 hover:scale-105 active:scale-95'
+              }`}
+              type="button"
+            >
+              <BarChart3 className="h-5 w-5" />
+              <span className="font-medium">{showDashboard ? 'Hide Dashboard' : 'Token Dashboard'}</span>
+            </button>
+
             <LibraryButton
               showLibrary={showLibrary}
               onToggle={handleToggleLibrary}
@@ -3095,7 +3132,20 @@ const handleShowWriterSuggestions = async () => {
         )}
         
         {/* ENHANCED: Improved conditional rendering with proper library coordination */}
-        {showLibrary ? (
+        {showDashboard ? (
+          <div key="token-dashboard" className="fade-in">
+            {session?.user && (
+              <TokenDashboard
+                userId={session.user.id}
+                onUpgradeClick={handleUpgradeFromDashboard}
+                onManageSubscription={() => {
+                  setShowDashboard(false);
+                  console.log('🚀 Navigate to subscription management');
+                }}
+              />
+            )}
+          </div>
+        ) : showLibrary ? (
           <div key="script-library" className="fade-in">
             <ScriptLibrary onScriptSelected={handleScriptSelected} />
           </div>
@@ -3197,7 +3247,12 @@ const handleShowWriterSuggestions = async () => {
 // NEW: Router-enabled App Component
 const App: React.FC = () => {
   return (
-    <Router>
+    <Router 
+      future={{
+        v7_startTransition: true,
+        v7_relativeSplatPath: true
+      }}
+    >
       <div className="min-h-screen bg-slate-900">
         <Routes>
           {/* Main App Route */}
