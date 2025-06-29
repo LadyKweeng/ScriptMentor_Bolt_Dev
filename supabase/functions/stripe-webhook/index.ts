@@ -20,12 +20,12 @@ const PRICE_ID_TO_TOKENS: Record<string, { tokens: number; tier: string }> = {
   'price_1Ram1AEOpk1Bj1ee2sRTCp8b': { tokens: 1500, tier: 'pro' },      // Pro Tier
 };
 
-// Token costs for one-time purchases (if implementing later)
+// Token package price IDs to token amounts mapping
 const TOKEN_PACKAGE_PRICES: Record<string, number> = {
-  // Add token package price IDs here when implementing Conversation 6
-  // 'price_token_100': 100,
-  // 'price_token_250': 250,
-  // etc.
+  'price_token_starter_100': 100,
+  'price_token_power_250': 250,
+  'price_token_pro_500': 500,
+  'price_token_ultimate_1000': 1000,
 };
 
 Deno.serve(async (req) => {
@@ -212,13 +212,93 @@ async function handlePaymentFailed(invoice: Stripe.Invoice) {
 }
 
 async function handleOneTimePayment(paymentIntent: Stripe.PaymentIntent) {
-  // Handle one-time token purchases (implement in Conversation 6)
   console.info(`One-time payment succeeded: ${paymentIntent.id}`);
+  
+  // For token purchases, the main handling is done in handleOneTimeTokenPurchase
+  // via the checkout.session.completed event, which provides more context
+  // This function serves as a backup verification
+  
+  try {
+    // Verify the payment was for a token package by checking if it has our metadata
+    const sessions = await stripe.checkout.sessions.list({
+      payment_intent: paymentIntent.id,
+      limit: 1
+    });
+
+    if (sessions.data.length > 0) {
+      const session = sessions.data[0];
+      console.info(`Payment ${paymentIntent.id} associated with session ${session.id}`);
+      
+      // Token processing will be handled by the session.completed event
+      // This just provides additional logging/verification
+    }
+  } catch (error) {
+    console.error('Error verifying one-time payment:', error);
+  }
 }
 
 async function handleOneTimeTokenPurchase(session: Stripe.Checkout.Session) {
-  // Extract order information and save to stripe_orders
   try {
+    console.info(`Processing one-time token purchase for session: ${session.id}`);
+    
+    // Get line items to determine what was purchased
+    const lineItems = await stripe.checkout.sessions.listLineItems(session.id, {
+      expand: ['data.price.product']
+    });
+
+    if (!lineItems.data.length) {
+      console.error('No line items found for session:', session.id);
+      return;
+    }
+
+    const lineItem = lineItems.data[0];
+    const priceId = lineItem.price?.id;
+    
+    if (!priceId) {
+      console.error('No price ID found for line item:', lineItem);
+      return;
+    }
+
+    // Get token amount from price ID
+    const tokensToAdd = TOKEN_PACKAGE_PRICES[priceId];
+    
+    if (!tokensToAdd) {
+      console.error(`Unknown token package price ID: ${priceId}`);
+      return;
+    }
+
+    // Get user ID from customer mapping
+    if (!session.customer || typeof session.customer !== 'string') {
+      console.error('No customer ID in session:', session.id);
+      return;
+    }
+
+    const { data: customer } = await supabase
+      .from('stripe_customers')
+      .select('user_id')
+      .eq('customer_id', session.customer)
+      .single();
+
+    if (!customer) {
+      console.error(`No user mapping found for customer: ${session.customer}`);
+      return;
+    }
+
+    // Add tokens to user account
+    const { error: tokenError } = await supabase.rpc('allocate_tokens', {
+      p_user_id: customer.user_id,
+      p_tokens_to_add: tokensToAdd,
+      p_transaction_type: 'one_time_purchase',
+      p_stripe_payment_id: session.payment_intent as string,
+      p_description: `One-time purchase: ${tokensToAdd} tokens`
+    });
+
+    if (tokenError) {
+      console.error('Error allocating tokens:', tokenError);
+      return;
+    }
+
+    // Record the order
     const { error: orderError } = await supabase.from('stripe_orders').insert({
       checkout_session_id: session.id,
       payment_intent_id: session.payment_intent,
@@ -227,7 +307,9 @@ async function handleOneTimeTokenPurchase(session: Stripe.Checkout.Session) {
       amount_total: session.amount_total,
       currency: session.currency,
       payment_status: session.payment_status,
-      status: 'completed'
+      status: 'completed',
+      tokens_purchased: tokensToAdd,
+      price_id: priceId
     });
 
     if (orderError) {
@@ -235,11 +317,22 @@ async function handleOneTimeTokenPurchase(session: Stripe.Checkout.Session) {
       return;
     }
 
-    console.info(`Successfully processed one-time payment for session: ${session.id}`);
+    console.info(`Successfully processed token purchase: ${tokensToAdd} tokens for user ${customer.user_id}`);
     
-    // TODO: Handle token packages when implementing Conversation 6
+    // Log the token transaction
+    await supabase.from('system_logs').insert({
+      event_type: 'token_purchase',
+      details: {
+        user_id: customer.user_id,
+        tokens_added: tokensToAdd,
+        price_id: priceId,
+        amount: session.amount_total,
+        session_id: session.id
+      }
+    });
+
   } catch (error) {
-    console.error('Error processing one-time payment:', error);
+    console.error('Error processing one-time token purchase:', error);
   }
 }
 
